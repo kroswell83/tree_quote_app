@@ -70,7 +70,7 @@
   </section>
 
   <section id="quote" class="grid two hidden">
-    <div class="grid"><div class="grid" id="treeList"></div><div id="quoteBottomActions" class="card actions"><button class="btn primary" onclick="addTree()">+ Add Tree</button><button class="btn good" onclick="saveQuoteToCustomer()">Save Quote</button></div></div>
+    <div class="grid"><div class="grid" id="treeList"></div><div id="quoteBottomActions" class="card actions"><button class="btn primary" onclick="addTree()">+ Add Tree</button></div></div>
     <aside class="card">
       <h2>Quote Summary</h2>
       <label>Quote name</label><input id="quoteName" oninput="currentQuote.name=this.value; scheduleSave(); renderSummary();" />
@@ -85,7 +85,7 @@
       <div class="divider"></div>
       <h3>Customer-facing quote</h3>
       <p class="small">No hourly rates or man-hour breakdowns are shown here.</p>
-      <div class="actions"><button class="btn" onclick="copyCustomerQuote()">Copy Customer Quote</button><button class="btn" onclick="printCustomerQuote()">Print</button><button class="btn bad" onclick="resetQuote()">Clear Quote</button></div>
+      <div class="actions"><button class="btn good" onclick="saveQuoteToCustomer()">Save Quote</button><button class="btn" onclick="copyCustomerQuote()">Copy Customer Quote</button><button class="btn" onclick="printCustomerQuote()">Print</button><button class="btn bad" onclick="resetQuote()">Clear Quote</button></div>
       <textarea id="customerQuoteText" rows="14" style="margin-top:10px" readonly></textarea>
       <div class="divider"></div>
       <h3>Internal summary</h3>
