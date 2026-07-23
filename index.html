@@ -53,7 +53,7 @@
     <div class="card">
       <h2>Customers</h2>
       <input id="customerSearch" placeholder="Search name, address, phone..." oninput="renderCustomers()" />
-      <div class="actions" style="margin-top:10px"><button class="btn primary" onclick="newCustomer()">+ New Customer</button><button class="btn" onclick="newQuote()">New Blank Quote</button></div>
+      <div class="actions" style="margin-top:10px"><button class="btn primary" onclick="newCustomer()">+ New Customer</button></div>
       <div id="customersList" style="margin-top:10px"></div>
     </div>
     <div class="card">
@@ -64,7 +64,7 @@
       <label>Notes</label><textarea id="custNotes" rows="3" oninput="updateActiveCustomer('notes',this.value)"></textarea>
       <div class="actions" style="margin-top:10px"><button class="btn good" onclick="saveCustomerAndQuote()">Save Customer + Quote</button><button class="btn bad" onclick="deleteActiveCustomer()">Delete Customer</button></div>
       <div class="divider"></div>
-      <h3>Saved Quotes</h3>
+      <div class="topbar"><h3 style="margin:0">Saved Quotes</h3><button class="btn primary hidden" id="newQuoteBtn" onclick="newQuoteForCustomer()">+ New Quote</button></div>
       <div id="customerQuotes"></div>
     </div>
   </section>
@@ -364,6 +364,12 @@
   window.deleteActiveCustomer=function(){const c=activeCustomer(); if(!c)return alert('No customer selected.'); if(confirm('Delete this customer and all saved quotes?')){c.deleted=true; c.updatedAt=new Date().toISOString(); activeCustomerId=null; activeQuoteId=null; scheduleSave(); renderAll();}}
   window.saveCustomerAndQuote=function(){if(!activeCustomerId)newCustomer(); saveQuoteToCustomer();}
   window.newQuote=function(){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; activeQuoteId=null; renderAll(); showTab('quote'); scheduleSave();}
+  window.newQuoteForCustomer=function(){
+    const c=activeCustomer();
+    if(!c){alert('Select or create a customer first.'); return;}
+    currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+    activeQuoteId=null; scheduleSave(); renderAll(); showTab('quote');
+  }
   window.saveQuoteToCustomer=function(){let c=activeCustomer(); if(!c){alert('Create or select a customer first.'); showTab('customers'); return;} currentQuote.name=$('quoteName')?.value||currentQuote.name||'New Quote'; currentQuote.status=$('quoteStatus')?.value||currentQuote.status||'Draft'; currentQuote.total=allCalc().total; currentQuote.updatedAt=new Date().toISOString(); const existing=c.quotes.findIndex(q=>q.id===currentQuote.id); if(existing>=0)c.quotes[existing]=clone(currentQuote); else c.quotes.unshift(clone(currentQuote)); activeQuoteId=currentQuote.id; c.updatedAt=new Date().toISOString(); scheduleSave(); renderAll(); alert('Quote saved to customer.');}
   window.loadQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); activeQuoteId=qid; renderAll(); showTab('quote');}
   window.duplicateQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); currentQuote.id=uid(); currentQuote.name=(currentQuote.name||'Quote')+' Copy'; currentQuote.status='Draft'; currentQuote.createdAt=new Date().toISOString(); activeQuoteId=null; renderAll(); showTab('quote');}
@@ -380,7 +386,7 @@
       +`<button class="btn" style="margin-top:8px" onclick="newCustomer(true)">+ New Customer</button>`;
   }
   function renderCustomers(){const q=($('customerSearch')?.value||'').toLowerCase(); const list=$('customersList'); list.innerHTML=''; const matches=liveCustomers().filter(c=>[c.name,c.address,c.phone,c.email].join(' ').toLowerCase().includes(q)); if(matches.length===0){list.innerHTML='<p>No customers yet.</p>'; return;} matches.forEach(c=>{const div=document.createElement('div'); div.className='listitem '+(c.id===activeCustomerId?'active':''); div.innerHTML=`<b>${esc(c.name)||'Unnamed Customer'}</b><p>${esc(c.address)||'No address'}</p><p class="small">${liveQuotes(c).length} saved quote(s)</p><button class="btn" onclick="selectCustomer('${c.id}')">Open</button>`; list.appendChild(div);});}
-  function renderCustomerDetails(){const c=activeCustomer(); ['custName','custAddress','custPhone','custEmail','custNotes'].forEach(id=>$(id).value=''); $('customerQuotes').innerHTML='<p>Select or create a customer.</p>'; if(!c)return; $('custName').value=c.name||''; $('custAddress').value=c.address||''; $('custPhone').value=c.phone||''; $('custEmail').value=c.email||''; $('custNotes').value=c.notes||''; const qs=liveQuotes(c); $('customerQuotes').innerHTML=qs.length?qs.map(q=>`<div class="listitem ${q.id===activeQuoteId?'active':''}"><b>${esc(q.name||'Quote')}</b><p>${esc(q.status||'Draft')} • ${money(q.total||0)} • ${(q.trees||[]).reduce((sum,t)=>sum+(Math.floor(Number(t.qty||1))>0?Math.floor(Number(t.qty||1)):1),0)} tree(s)</p><div class="actions"><button class="btn" onclick="loadQuote('${q.id}')">View/Edit</button><button class="btn" onclick="duplicateQuote('${q.id}')">Duplicate</button><button class="btn bad" onclick="deleteQuote('${q.id}')">Delete</button></div></div>`).join(''):'<p>No saved quotes for this customer yet.</p>';}
+  function renderCustomerDetails(){const c=activeCustomer(); if($('newQuoteBtn'))$('newQuoteBtn').classList.toggle('hidden',!c); ['custName','custAddress','custPhone','custEmail','custNotes'].forEach(id=>$(id).value=''); $('customerQuotes').innerHTML='<p>Select or create a customer.</p>'; if(!c)return; $('custName').value=c.name||''; $('custAddress').value=c.address||''; $('custPhone').value=c.phone||''; $('custEmail').value=c.email||''; $('custNotes').value=c.notes||''; const qs=liveQuotes(c); $('customerQuotes').innerHTML=qs.length?qs.map(q=>`<div class="listitem ${q.id===activeQuoteId?'active':''}"><b>${esc(q.name||'Quote')}</b><p>${esc(q.status||'Draft')} • ${money(q.total||0)} • ${(q.trees||[]).reduce((sum,t)=>sum+(Math.floor(Number(t.qty||1))>0?Math.floor(Number(t.qty||1)):1),0)} tree(s)</p><div class="actions"><button class="btn" onclick="loadQuote('${q.id}')">View/Edit</button><button class="btn" onclick="duplicateQuote('${q.id}')">Duplicate</button><button class="btn bad" onclick="deleteQuote('${q.id}')">Delete</button></div></div>`).join(''):'<p>No saved quotes for this customer yet.</p>';}
 
   window.addTree=function(){currentQuote.trees.push({id:uid(),type:state.treeTypes[0],qty:1,height:'',dbh:'',canopy:'',size:'Auto',haul:'Yes',hazardCount:1,removalRisky:'No',services:{}}); scheduleSave(); renderAll();}
   window.removeTree=id=>{currentQuote.trees=currentQuote.trees.filter(t=>t.id!==id); scheduleSave(); renderAll();}
