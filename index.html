@@ -160,6 +160,8 @@
     if(s.stormRisky===undefined)s.stormRisky=false;
     if(!s.species)s.species={};
     (state.treeTypes||[]).forEach(t=>{if(s.species[t]===undefined)s.species[t]=1});
+    // an early build shipped opinionated species factors; clear them out one time
+    if(!s.speciesResetV1){Object.keys(s.species).forEach(k=>s.species[k]=1); s.speciesResetV1=true;}
   }
   // Old builds had 4 separate pruning checkboxes. Fold them into Tree Trimming with a scope.
   const OLD_TRIM='Tree Trimming / Pruning', OLD_DEAD='Deadwood Removal', OLD_RAISE='Canopy Raising / Clearance Pruning', OLD_SUCKER='Sucker / Sprout Removal';
@@ -193,16 +195,106 @@
   }
   function scheduleSave(){saveLocal(); if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,700)}
   window.saveNow=async function(){saveLocal(); if(firebaseReady&&user&&accessGranted&&state.companyId){try{await setDoc(doc(db,'companies',state.companyId,'appData','main'),{state,updatedAt:serverTimestamp(),updatedBy:user.email},{merge:true});$('syncStatus').textContent='Synced to company '+state.companyId+'.';$('syncStatus').className='status online'}catch(e){$('syncStatus').textContent='Sync failed: '+e.message;$('syncStatus').className='status offline'}}}
-  async function loadCloud(){if(!firebaseReady||!user||!accessGranted||!state.companyId)return; const companyId=state.companyId; const ref=doc(db,'companies',companyId,'appData','main'); const snap=await getDoc(ref); if(snap.exists()&&snap.data().state){state=deepMerge(state,snap.data().state); state.companyId=companyId; ensureSettings(); migrateAll(); saveLocal(); renderAll(); $('syncStatus').textContent='Loaded shared company data: '+companyId; $('syncStatus').className='status online'}else{await saveNow();}}
+  // "Tree Company", "Tree-Company", "tree company" all resolve to the same id
+  function normalizeCompanyId(v){return String(v||'').trim().toLowerCase().replace(/[\s_]+/g,'-').replace(/[^a-z0-9-]/g,'').replace(/-+/g,'-').replace(/^-|-$/g,'')}
+  // Exact document ids seen in the Firestore console. Anything listed here is checked
+  // verbatim, so no guessing is involved for spellings we already know exist.
+  const KNOWN_COMPANY_IDS=['Tree company','Tree-Company','Tree-company','tree-company'];
+  // every spelling of the id that an earlier build might have written to
+  function companyIdCandidates(raw){
+    const canon=normalizeCompanyId(raw), words=canon.split('-').filter(Boolean);
+    const cap=w=>w.charAt(0).toUpperCase()+w.slice(1);
+    const out=new Set([String(raw||'').trim(),canon]);
+    KNOWN_COMPANY_IDS.forEach(k=>{if(normalizeCompanyId(k)===canon)out.add(k)});
+    [' ','-','_',''].forEach(sep=>{
+      out.add(words.join(sep));                                    // tree company
+      out.add(words.map(cap).join(sep));                           // Tree Company
+      out.add(words.map((w,i)=>i===0?cap(w):w).join(sep));         // Tree company
+      out.add(words.map(w=>w.toUpperCase()).join(sep));            // TREE COMPANY
+    });
+    return [...out].filter(Boolean);
+  }
+  function docTs(d){try{return d&&d.toMillis?d.toMillis():0}catch(e){return 0}}
+  async function fetchCompanyState(id){
+    try{const s=await getDoc(doc(db,'companies',id,'appData','main'));
+      if(s.exists()&&s.data().state)return{id,state:s.data().state,ts:docTs(s.data().updatedAt)};
+    }catch(e){}
+    return null;
+  }
+  function mergeQuoteLists(a,b){
+    const m=new Map();
+    [...(a||[]),...(b||[])].forEach(q=>{if(!q||!q.id)return;
+      const p=m.get(q.id);
+      if(!p||new Date(q.updatedAt||0)>new Date(p.updatedAt||0))m.set(q.id,clone(q));});
+    return [...m.values()];
+  }
+  function mergeCustomerLists(lists){
+    const byId=new Map();
+    lists.forEach(list=>(list||[]).forEach(c=>{
+      if(!c||!c.id)return;
+      const prev=byId.get(c.id);
+      if(!prev){byId.set(c.id,clone(c)); return;}
+      const cNewer=new Date(c.updatedAt||0)>new Date(prev.updatedAt||0);
+      const keep=cNewer?clone(c):prev, other=cNewer?prev:c;
+      keep.quotes=mergeQuoteLists(keep.quotes,other.quotes);
+      byId.set(c.id,keep);
+    }));
+    const all=[...byId.values()].sort((a,b)=>new Date(b.updatedAt||0)-new Date(a.updatedAt||0));
+    const real=all.filter(c=>c.id!=='samplecustomer');
+    return real.length?real:all;
+  }
+  function mergeStates(sources,localState){
+    const all=[...sources.map(s=>s.state),localState].filter(Boolean);
+    const customers=mergeCustomerLists(all.map(s=>s.customers));
+    let best=null,bestTs=-1;
+    sources.forEach(s=>{if(s.ts>=bestTs){bestTs=s.ts; best=s.state;}});
+    const settings=clone((best&&best.settings)||localState.settings||{});
+    const treeTypes=[];
+    all.forEach(s=>(s.treeTypes||[]).forEach(t=>{if(!treeTypes.includes(t))treeTypes.push(t)}));
+    if(treeTypes.includes('Other')){treeTypes.splice(treeTypes.indexOf('Other'),1); treeTypes.push('Other');}
+    return{settings,treeTypes:treeTypes.length?treeTypes:clone(defaultTreeTypes),customers,companyId:localState.companyId};
+  }
+  async function loadCloud(){
+    if(!firebaseReady||!user||!accessGranted||!state.companyId)return;
+    const canonical=normalizeCompanyId(state.companyId);
+    state.companyId=canonical;
+    const primary=await fetchCompanyState(canonical);
+    // once the variants have been folded in we never scan again
+    if(primary&&primary.state.settings&&primary.state.settings.mergedV1){
+      state=deepMerge(state,primary.state); state.companyId=canonical;
+      ensureSettings(); migrateAll(); saveLocal(); renderAll();
+      $('syncStatus').textContent='Loaded shared company data: '+canonical;
+      $('syncStatus').className='status online'; return;
+    }
+    $('syncStatus').textContent='Checking for company data saved under other spellings...';
+    $('syncStatus').className='status';
+    const sources=[];
+    // exact-match dedup only: "Tree company" and "tree company" are different documents
+    for(const id of companyIdCandidates(canonical)){
+      const got=await fetchCompanyState(id); if(got)sources.push(got);
+    }
+    if(sources.length){
+      const merged=mergeStates(sources,state);
+      merged.settings.mergedV1=true;
+      state=merged; state.companyId=canonical;
+      ensureSettings(); migrateAll(); saveLocal(); renderAll();
+      await saveNow();
+      const from=sources.length>1?' (combined from '+sources.length+' spellings of the company name)':'';
+      $('syncStatus').textContent='Loaded shared company data: '+canonical+from;
+      $('syncStatus').className='status online';
+    } else {
+      state.settings.mergedV1=true; ensureSettings(); await saveNow();
+    }
+  }
   function setAuthMessage(msg,kind='small'){const box=$('authMessage'); if(!box)return; box.textContent=msg; box.className='auth-msg '+kind;}
   function showApp(allowed){$('authGate').classList.toggle('hidden',!!allowed); $('appShell').classList.toggle('hidden',!allowed);}
-  function syncLoginCompanyId(){const v=($('loginCompanyId')?.value||'').trim(); if(v){state.companyId=v; saveLocal();} return state.companyId;}
+  function syncLoginCompanyId(){const v=normalizeCompanyId($('loginCompanyId')?.value||''); if(v){state.companyId=v; saveLocal();} else if(state.companyId){state.companyId=normalizeCompanyId(state.companyId);} return state.companyId;}
   async function openForSignedInUser(u){if(!u){accessGranted=false; showApp(false); if($('userInfo'))$('userInfo').textContent='Not signed in.'; return;} const companyId=syncLoginCompanyId(); if(!companyId){accessGranted=false; showApp(false); setAuthMessage('Enter the Company ID to open the app.','danger'); return;} accessGranted=true; showApp(true); $('userInfo').textContent='Signed in as '+u.email+' • Company ID: '+companyId; setAuthMessage('Signed in. Loading shared company data...'); await loadCloud(); renderAll();}
   function setupFirebase(){try{if(!window.firebaseConfig){$('firebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';$('authFirebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';setAuthMessage('Firebase must be configured before anyone can sign in.','danger');return}const app=initializeApp(window.firebaseConfig);auth=getAuth(app);db=getFirestore(app);firebaseReady=true;$('firebaseBox').className='ok';$('firebaseBox').textContent='Firebase configured. Signed-in users with the same Company ID can sync shared company data.';$('authFirebaseBox').className='ok';$('authFirebaseBox').textContent='Firebase configured.';onAuthStateChanged(auth,async u=>{user=u; await openForSignedInUser(u);});}catch(e){$('firebaseBox').className='danger';$('firebaseBox').textContent='Firebase error: '+e.message;$('authFirebaseBox').className='danger';$('authFirebaseBox').textContent='Firebase error: '+e.message;}}
   window.signIn=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const companyId=syncLoginCompanyId(); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!companyId)return setAuthMessage('Enter the Company ID first.','danger'); if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Signing in...'); await signInWithEmailAndPassword(auth,email,password).catch(e=>setAuthMessage(e.message,'danger'));}
   window.signUp=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const companyId=syncLoginCompanyId(); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!companyId)return setAuthMessage('Enter the Company ID first.','danger'); if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Creating account...'); try{await createUserWithEmailAndPassword(auth,email,password); setAuthMessage('Account created. Loading shared company data...');}catch(e){setAuthMessage(e.message,'danger');}}
   window.signOutNow=async()=>{if(firebaseReady) await signOut(auth); accessGranted=false; showApp(false); setAuthMessage('Signed out.');}
-  window.setCompanyId=v=>{state.companyId=(v||'').trim(); if($('loginCompanyId'))$('loginCompanyId').value=state.companyId; scheduleSave(); if(user&&state.companyId){accessGranted=true; showApp(true); loadCloud();}}
+  window.setCompanyId=v=>{state.companyId=normalizeCompanyId(v); if($('loginCompanyId'))$('loginCompanyId').value=state.companyId; scheduleSave(); if(user&&state.companyId){accessGranted=true; showApp(true); loadCloud();}}
   window.showTab=tab=>{['customers','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);});}
 
   function activeCustomer(){return state.customers.find(c=>c.id===activeCustomerId)||null}
