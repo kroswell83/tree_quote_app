@@ -123,6 +123,14 @@
   const TRIM_SCOPES=['Deadwood only','Sprouts and suckers only','Standard','Heavy'];
   // scopes that contain no deadwood work, so the risky-rate toggle skips them
   const TRIM_NO_DEADWOOD=['Sprouts and suckers only'];
+  // what the estimator sees in the dropdown. Keys above stay the stored value.
+  const TRIM_SCOPE_LABELS={
+    'Deadwood only':'Deadwood only (dead limbs out)',
+    'Sprouts and suckers only':'Sprouts & suckers only (base + water sprouts)',
+    'Standard':'Standard (deadwood + canopy raise + suckers)',
+    'Heavy':'Heavy (standard + thinning & reduction)'
+  };
+  const scopeLabel=k=>TRIM_SCOPE_LABELS[k]||k;
   const defaultTreeTypes=['Live Oak','Texas Red Oak / Spanish Oak','Post Oak','Bur Oak','Lacey Oak','Cedar Elm','Pecan','Ashe Juniper / Cedar','Hackberry','Texas Ash','Sycamore','Bald Cypress','Texas Mountain Laurel','Texas Redbud','Crepe Myrtle','Mexican Plum','Escarpment Black Cherry','Other'];
   const defaultHours={}; services.forEach(s=>defaultHours[s]={Small:0.5,Medium:1.25,Large:2.5});
   defaultHours[REMOVAL]={Small:1.5,Medium:4,Large:8}; defaultHours['Mistletoe Removal']={Small:0.5,Medium:1,Large:2};
@@ -453,7 +461,7 @@
           <div class="row"><div><label>DBH inches</label><input type="number" value="${t.dbh||''}" oninput="updateTree('${t.id}','dbh',this.value)"></div><div><label>Canopy spread ft</label><input type="number" value="${t.canopy||''}" oninput="updateTree('${t.id}','canopy',this.value)"></div></div>
           <div class="row"><div><label>Size</label><select onchange="updateTree('${t.id}','size',this.value)"><option ${t.size==='Auto'?'selected':''}>Auto</option><option ${t.size==='Small'?'selected':''}>Small</option><option ${t.size==='Medium'?'selected':''}>Medium</option><option ${t.size==='Large'?'selected':''}>Large</option></select></div><div><label>Haul away?</label><select onchange="updateTree('${t.id}','haul',this.value)"><option ${t.haul==='Yes'?'selected':''}>Yes</option><option ${t.haul==='No'?'selected':''}>No</option></select></div></div>
           <label>Services</label><div class="service-grid">${svc}</div>
-          ${trimOn?`<label>Trim scope</label><select onchange="updateTree('${t.id}','trimScope',this.value)">${TRIM_SCOPES.map(k=>`<option ${k===trimScopeOf(t)?'selected':''}>${esc(k)}</option>`).join('')}</select>`:''}
+          ${trimOn?`<label>Trim scope</label><select onchange="updateTree('${t.id}','trimScope',this.value)">${TRIM_SCOPES.map(k=>`<option value="${esc(k)}" ${k===trimScopeOf(t)?'selected':''}>${esc(scopeLabel(k))}</option>`).join('')}</select>`:''}
           ${hazardOn?`<label>Number of hazard limbs</label><input type="number" min="1" step="1" value="${hazardCount(t)}" oninput="updateTree('${t.id}','hazardCount',this.value)">`:''}
           ${removalOn?`<label>Difficult landing or tight drop zone?</label><select onchange="updateTree('${t.id}','removalRisky',this.value)"><option ${t.removalRisky!=='Yes'?'selected':''}>No</option><option ${t.removalRisky==='Yes'?'selected':''}>Yes</option></select><p class="small">Yes bills the removal hours at the risky rate. Trimming and haul are not affected.</p>`:''}
           <div class="divider"></div>
@@ -468,7 +476,7 @@
     services.forEach(s=>{
       const d=document.createElement('div'); d.className='card';
       if(s===TRIM){
-        const scopeRows=TRIM_SCOPES.map(k=>`<b class="small" style="color:var(--ink)">${esc(k)}</b><div class="three">${sizes.map(z=>`<div><label>${z}</label><input type="number" step="0.25" value="${state.settings.trimScopes[k][z]}" oninput="updateTrimScope('${attr(k)}','${z}',this.value)"></div>`).join('')}</div>`).join('');
+        const scopeRows=TRIM_SCOPES.map(k=>`<b class="small" style="color:var(--ink)">${esc(scopeLabel(k))}</b><div class="three">${sizes.map(z=>`<div><label>${z}</label><input type="number" step="0.25" value="${state.settings.trimScopes[k][z]}" oninput="updateTrimScope('${attr(k)}','${z}',this.value)"></div>`).join('')}</div>`).join('');
         d.innerHTML=`<b>${esc(s)}</b><p class="small">Deadwood only = deadwood. Sprouts and suckers only = suckers. Standard = deadwood + canopy raise + suckers. Heavy = standard + reduction and thinning.</p>${scopeRows}<div class="divider"></div><b class="small" style="color:var(--ink)">Deadwood hours inside each scope</b><p class="small">Only used when deadwood is billed at the risky rate. Capped at the scope total, and skipped on Sprouts and suckers only.</p><div class="three">${sizes.map(z=>`<div><label>${z}</label><input type="number" step="0.25" value="${state.settings.trimDeadwood[z]}" oninput="updateTrimDeadwood('${z}',this.value)"></div>`).join('')}</div><label>Haul × (multiplies the base haul ratio)</label><input type="number" step="0.25" value="${haulMult(s)}" oninput="updateServiceHaulMult('${attr(s)}',this.value)">`;
       } else {
         d.innerHTML=`<b>${esc(s)}</b><div class="three">${sizes.map(z=>`<div><label>${z}</label><input type="number" step="0.25" value="${state.settings.serviceHours[s][z]}" oninput="updateServiceHours('${attr(s)}','${z}',this.value)"></div>`).join('')}</div><label>Haul × (multiplies the base haul ratio)</label><input type="number" step="0.25" value="${haulMult(s)}" oninput="updateServiceHaulMult('${attr(s)}',this.value)">`;
