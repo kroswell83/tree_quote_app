@@ -62,7 +62,7 @@
       <label>Property address</label><input id="custAddress" oninput="updateActiveCustomer('address',this.value)" />
       <div class="row"><div><label>Phone</label><input id="custPhone" oninput="updateActiveCustomer('phone',this.value)" /></div><div><label>Email</label><input id="custEmail" oninput="updateActiveCustomer('email',this.value)" /></div></div>
       <label>Notes</label><textarea id="custNotes" rows="3" oninput="updateActiveCustomer('notes',this.value)"></textarea>
-      <div class="actions" style="margin-top:10px"><button class="btn good" onclick="saveCustomerAndQuote()">Save Customer + Quote</button><button class="btn bad" onclick="deleteActiveCustomer()">Delete Customer</button></div>
+      <div class="actions" style="margin-top:10px"><button class="btn good" onclick="saveCustomerOnly()">Save Customer</button><button class="btn bad" onclick="deleteActiveCustomer()">Delete Customer</button></div>
       <div class="divider"></div>
       <div class="topbar"><h3 style="margin:0">Saved Quotes</h3><button class="btn primary hidden" id="newQuoteBtn" onclick="newQuoteForCustomer()">+ New Quote</button></div>
       <div id="customerQuotes"></div>
@@ -362,7 +362,13 @@
   window.updateActiveCustomer=function(field,value){const c=activeCustomer(); if(!c)return; c[field]=value; c.updatedAt=new Date().toISOString(); scheduleSave(); renderCustomers(); renderCustomerDetails(); renderSummary();}
   window.selectCustomer=function(id){activeCustomerId=id; saveLocal(); renderAll();};
   window.deleteActiveCustomer=function(){const c=activeCustomer(); if(!c)return alert('No customer selected.'); if(confirm('Delete this customer and all saved quotes?')){c.deleted=true; c.updatedAt=new Date().toISOString(); activeCustomerId=null; activeQuoteId=null; scheduleSave(); renderAll();}}
-  window.saveCustomerAndQuote=function(){if(!activeCustomerId)newCustomer(); saveQuoteToCustomer();}
+  window.saveCustomerOnly=async function(){
+    const c=activeCustomer();
+    if(!c){alert('Select or create a customer first.'); return;}
+    c.updatedAt=new Date().toISOString();
+    saveLocal(); await saveNow(); renderAll();
+    alert('Customer saved.');
+  }
   window.newQuote=function(){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; activeQuoteId=null; renderAll(); showTab('quote'); scheduleSave();}
   window.newQuoteForCustomer=function(){
     const c=activeCustomer();
