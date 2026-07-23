@@ -116,7 +116,7 @@
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js';
   import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
-  import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js';
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js';
 
   const TRIM='Tree Trimming', HAZARD='Hazard Limb Removal', STORM='Storm Cleanup', REMOVAL='Tree Removal';
   const services=[TRIM,HAZARD,STORM,REMOVAL,'Mistletoe Removal'];
@@ -193,8 +193,59 @@
     (currentQuote.trees||[]).forEach(migrateTree);
     (state.customers||[]).forEach(c=>(c.quotes||[]).forEach(q=>(q.trees||[]).forEach(migrateTree)));
   }
-  function scheduleSave(){saveLocal(); if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,700)}
-  window.saveNow=async function(){saveLocal(); if(firebaseReady&&user&&accessGranted&&state.companyId){try{await setDoc(doc(db,'companies',state.companyId,'appData','main'),{state,updatedAt:serverTimestamp(),updatedBy:user.email},{merge:true});$('syncStatus').textContent='Synced to company '+state.companyId+'.';$('syncStatus').className='status online'}catch(e){$('syncStatus').textContent='Sync failed: '+e.message;$('syncStatus').className='status offline'}}}
+  function scheduleSave(){saveLocal(); if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,1200)}
+  function unionTypes(a,b){const out=[];[...(a||[]),...(b||[])].forEach(t=>{if(t&&!out.includes(t))out.push(t)});
+    if(out.includes('Other')){out.splice(out.indexOf('Other'),1); out.push('Other');}
+    return out.length?out:clone(defaultTreeTypes);}
+  window.saveNow=async function(){
+    saveLocal();
+    if(!(firebaseReady&&user&&accessGranted&&state.companyId))return;
+    const ref=doc(db,'companies',state.companyId,'appData','main');
+    try{
+      let merged=null;
+      // read + merge + write atomically; Firestore retries if someone else writes mid-flight
+      await runTransaction(db,async tx=>{
+        const snap=await tx.get(ref);
+        const remote=(snap.exists()&&snap.data().state)?snap.data().state:null;
+        merged=remote?{
+          settings:deepMerge(clone(remote.settings||{}),clone(state.settings||{})),
+          treeTypes:unionTypes(remote.treeTypes,state.treeTypes),
+          customers:mergeCustomerLists([remote.customers,state.customers]),
+          companyId:state.companyId
+        }:clone(state);
+        tx.set(ref,{state:merged,updatedAt:serverTimestamp(),updatedBy:user.email},{merge:true});
+      });
+      if(merged){state.customers=merged.customers; state.treeTypes=merged.treeTypes; saveLocal();}
+      $('syncStatus').textContent='Synced to company '+state.companyId+'.';
+      $('syncStatus').className='status online';
+    }catch(e){
+      $('syncStatus').textContent='Sync failed: '+e.message;
+      $('syncStatus').className='status offline';
+    }
+  }
+  // live updates from anyone else signed into the same company
+  let cloudUnsub=null, pendingRender=false;
+  function isTyping(){const el=document.activeElement; return !!(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'));}
+  function custSig(list){return JSON.stringify((list||[]).map(c=>[c.id,c.updatedAt,(c.quotes||[]).length,!!c.deleted]))}
+  function watchCloud(){
+    if(cloudUnsub){cloudUnsub(); cloudUnsub=null;}
+    if(!(firebaseReady&&user&&accessGranted&&state.companyId))return;
+    const ref=doc(db,'companies',state.companyId,'appData','main');
+    cloudUnsub=onSnapshot(ref,snap=>{
+      if(!snap.exists()||snap.metadata.hasPendingWrites)return;
+      const d=snap.data(); if(!d||!d.state)return;
+      const before=custSig(state.customers);
+      const mergedCustomers=mergeCustomerLists([state.customers,d.state.customers]);
+      if(custSig(mergedCustomers)===before)return;
+      state.customers=mergedCustomers;
+      state.treeTypes=unionTypes(state.treeTypes,d.state.treeTypes);
+      saveLocal();
+      if(isTyping())pendingRender=true; else renderAll();
+    },()=>{});
+  }
+  document.addEventListener('focusout',()=>{setTimeout(()=>{
+    if(pendingRender&&!isTyping()){pendingRender=false; renderAll();}
+  },150)});
   // "Tree Company", "Tree-Company", "tree company" all resolve to the same id
   function normalizeCompanyId(v){return String(v||'').trim().toLowerCase().replace(/[\s_]+/g,'-').replace(/[^a-z0-9-]/g,'').replace(/-+/g,'-').replace(/^-|-$/g,'')}
   // Exact document ids seen in the Firestore console. Anything listed here is checked
@@ -266,8 +317,6 @@
       $('syncStatus').textContent='Loaded shared company data: '+canonical;
       $('syncStatus').className='status online'; return;
     }
-    $('syncStatus').textContent='Checking for company data saved under other spellings...';
-    $('syncStatus').className='status';
     const sources=[];
     // exact-match dedup only: "Tree company" and "tree company" are different documents
     for(const id of companyIdCandidates(canonical)){
@@ -279,8 +328,7 @@
       state=merged; state.companyId=canonical;
       ensureSettings(); migrateAll(); saveLocal(); renderAll();
       await saveNow();
-      const from=sources.length>1?' (combined from '+sources.length+' spellings of the company name)':'';
-      $('syncStatus').textContent='Loaded shared company data: '+canonical+from;
+      $('syncStatus').textContent='Loaded shared company data: '+canonical;
       $('syncStatus').className='status online';
     } else {
       state.settings.mergedV1=true; ensureSettings(); await saveNow();
@@ -289,27 +337,29 @@
   function setAuthMessage(msg,kind='small'){const box=$('authMessage'); if(!box)return; box.textContent=msg; box.className='auth-msg '+kind;}
   function showApp(allowed){$('authGate').classList.toggle('hidden',!!allowed); $('appShell').classList.toggle('hidden',!allowed);}
   function syncLoginCompanyId(){const v=normalizeCompanyId($('loginCompanyId')?.value||''); if(v){state.companyId=v; saveLocal();} else if(state.companyId){state.companyId=normalizeCompanyId(state.companyId);} return state.companyId;}
-  async function openForSignedInUser(u){if(!u){accessGranted=false; showApp(false); if($('userInfo'))$('userInfo').textContent='Not signed in.'; return;} const companyId=syncLoginCompanyId(); if(!companyId){accessGranted=false; showApp(false); setAuthMessage('Enter the Company ID to open the app.','danger'); return;} accessGranted=true; showApp(true); $('userInfo').textContent='Signed in as '+u.email+' • Company ID: '+companyId; setAuthMessage('Signed in. Loading shared company data...'); await loadCloud(); renderAll();}
+  async function openForSignedInUser(u){if(!u){accessGranted=false; showApp(false); if($('userInfo'))$('userInfo').textContent='Not signed in.'; return;} const companyId=syncLoginCompanyId(); if(!companyId){accessGranted=false; showApp(false); setAuthMessage('Enter the Company ID to open the app.','danger'); return;} accessGranted=true; showApp(true); $('userInfo').textContent='Signed in as '+u.email+' • Company ID: '+companyId; setAuthMessage('Signed in. Loading shared company data...'); await loadCloud(); watchCloud(); renderAll();}
   function setupFirebase(){try{if(!window.firebaseConfig){$('firebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';$('authFirebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';setAuthMessage('Firebase must be configured before anyone can sign in.','danger');return}const app=initializeApp(window.firebaseConfig);auth=getAuth(app);db=getFirestore(app);firebaseReady=true;$('firebaseBox').className='ok';$('firebaseBox').textContent='Firebase configured. Signed-in users with the same Company ID can sync shared company data.';$('authFirebaseBox').className='ok';$('authFirebaseBox').textContent='Firebase configured.';onAuthStateChanged(auth,async u=>{user=u; await openForSignedInUser(u);});}catch(e){$('firebaseBox').className='danger';$('firebaseBox').textContent='Firebase error: '+e.message;$('authFirebaseBox').className='danger';$('authFirebaseBox').textContent='Firebase error: '+e.message;}}
   window.signIn=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const companyId=syncLoginCompanyId(); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!companyId)return setAuthMessage('Enter the Company ID first.','danger'); if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Signing in...'); await signInWithEmailAndPassword(auth,email,password).catch(e=>setAuthMessage(e.message,'danger'));}
   window.signUp=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const companyId=syncLoginCompanyId(); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!companyId)return setAuthMessage('Enter the Company ID first.','danger'); if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Creating account...'); try{await createUserWithEmailAndPassword(auth,email,password); setAuthMessage('Account created. Loading shared company data...');}catch(e){setAuthMessage(e.message,'danger');}}
-  window.signOutNow=async()=>{if(firebaseReady) await signOut(auth); accessGranted=false; showApp(false); setAuthMessage('Signed out.');}
-  window.setCompanyId=v=>{state.companyId=normalizeCompanyId(v); if($('loginCompanyId'))$('loginCompanyId').value=state.companyId; scheduleSave(); if(user&&state.companyId){accessGranted=true; showApp(true); loadCloud();}}
+  window.signOutNow=async()=>{if(cloudUnsub){cloudUnsub(); cloudUnsub=null;} if(firebaseReady) await signOut(auth); accessGranted=false; showApp(false); setAuthMessage('Signed out.');}
+  window.setCompanyId=v=>{state.companyId=normalizeCompanyId(v); if($('loginCompanyId'))$('loginCompanyId').value=state.companyId; scheduleSave(); if(user&&state.companyId){accessGranted=true; showApp(true); loadCloud().then(watchCloud);}}
   window.showTab=tab=>{['customers','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);});}
 
-  function activeCustomer(){return state.customers.find(c=>c.id===activeCustomerId)||null}
+  function activeCustomer(){const c=state.customers.find(x=>x.id===activeCustomerId); return (c&&!c.deleted)?c:null}
+  function liveCustomers(){return state.customers.filter(c=>!c.deleted)}
+  function liveQuotes(c){return ((c&&c.quotes)||[]).filter(q=>!q.deleted)}
   window.newCustomer=function(){const c={id:uid(),name:'',address:'',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; state.customers.unshift(c); activeCustomerId=c.id; currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; activeQuoteId=null; scheduleSave(); renderAll();}
   window.updateActiveCustomer=function(field,value){const c=activeCustomer(); if(!c)return; c[field]=value; c.updatedAt=new Date().toISOString(); scheduleSave(); renderCustomers(); renderCustomerDetails(); renderSummary();}
   window.selectCustomer=function(id){activeCustomerId=id; saveLocal(); renderAll();};
-  window.deleteActiveCustomer=function(){const c=activeCustomer(); if(!c)return alert('No customer selected.'); if(confirm('Delete this customer and all saved quotes?')){state.customers=state.customers.filter(x=>x.id!==c.id); activeCustomerId=null; activeQuoteId=null; scheduleSave(); renderAll();}}
+  window.deleteActiveCustomer=function(){const c=activeCustomer(); if(!c)return alert('No customer selected.'); if(confirm('Delete this customer and all saved quotes?')){c.deleted=true; c.updatedAt=new Date().toISOString(); activeCustomerId=null; activeQuoteId=null; scheduleSave(); renderAll();}}
   window.saveCustomerAndQuote=function(){if(!activeCustomerId)newCustomer(); saveQuoteToCustomer();}
   window.newQuote=function(){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; activeQuoteId=null; renderAll(); showTab('quote'); scheduleSave();}
   window.saveQuoteToCustomer=function(){let c=activeCustomer(); if(!c){alert('Create or select a customer first.'); showTab('customers'); return;} currentQuote.name=$('quoteName')?.value||currentQuote.name||'New Quote'; currentQuote.status=$('quoteStatus')?.value||currentQuote.status||'Draft'; currentQuote.total=allCalc().total; currentQuote.updatedAt=new Date().toISOString(); const existing=c.quotes.findIndex(q=>q.id===currentQuote.id); if(existing>=0)c.quotes[existing]=clone(currentQuote); else c.quotes.unshift(clone(currentQuote)); activeQuoteId=currentQuote.id; c.updatedAt=new Date().toISOString(); scheduleSave(); renderAll(); alert('Quote saved to customer.');}
   window.loadQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); activeQuoteId=qid; renderAll(); showTab('quote');}
   window.duplicateQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); currentQuote.id=uid(); currentQuote.name=(currentQuote.name||'Quote')+' Copy'; currentQuote.status='Draft'; currentQuote.createdAt=new Date().toISOString(); activeQuoteId=null; renderAll(); showTab('quote');}
-  window.deleteQuote=function(qid){const c=activeCustomer(); if(!c)return; if(confirm('Delete this saved quote?')){c.quotes=c.quotes.filter(q=>q.id!==qid); if(activeQuoteId===qid){activeQuoteId=null; newQuote();} scheduleSave(); renderAll();}}
-  function renderCustomers(){const q=($('customerSearch')?.value||'').toLowerCase(); const list=$('customersList'); list.innerHTML=''; const matches=state.customers.filter(c=>[c.name,c.address,c.phone,c.email].join(' ').toLowerCase().includes(q)); if(matches.length===0){list.innerHTML='<p>No customers yet.</p>'; return;} matches.forEach(c=>{const div=document.createElement('div'); div.className='listitem '+(c.id===activeCustomerId?'active':''); div.innerHTML=`<b>${esc(c.name)||'Unnamed Customer'}</b><p>${esc(c.address)||'No address'}</p><p class="small">${(c.quotes||[]).length} saved quote(s)</p><button class="btn" onclick="selectCustomer('${c.id}')">Open</button>`; list.appendChild(div);});}
-  function renderCustomerDetails(){const c=activeCustomer(); ['custName','custAddress','custPhone','custEmail','custNotes'].forEach(id=>$(id).value=''); $('customerQuotes').innerHTML='<p>Select or create a customer.</p>'; if(!c)return; $('custName').value=c.name||''; $('custAddress').value=c.address||''; $('custPhone').value=c.phone||''; $('custEmail').value=c.email||''; $('custNotes').value=c.notes||''; const qs=c.quotes||[]; $('customerQuotes').innerHTML=qs.length?qs.map(q=>`<div class="listitem ${q.id===activeQuoteId?'active':''}"><b>${esc(q.name||'Quote')}</b><p>${esc(q.status||'Draft')} • ${money(q.total||0)} • ${(q.trees||[]).reduce((sum,t)=>sum+(Math.floor(Number(t.qty||1))>0?Math.floor(Number(t.qty||1)):1),0)} tree(s)</p><div class="actions"><button class="btn" onclick="loadQuote('${q.id}')">View/Edit</button><button class="btn" onclick="duplicateQuote('${q.id}')">Duplicate</button><button class="btn bad" onclick="deleteQuote('${q.id}')">Delete</button></div></div>`).join(''):'<p>No saved quotes for this customer yet.</p>';}
+  window.deleteQuote=function(qid){const c=activeCustomer(); if(!c)return; if(confirm('Delete this saved quote?')){const q=c.quotes.find(x=>x.id===qid); if(q){q.deleted=true; q.updatedAt=new Date().toISOString();} c.updatedAt=new Date().toISOString(); if(activeQuoteId===qid){activeQuoteId=null; newQuote();} scheduleSave(); renderAll();}}
+  function renderCustomers(){const q=($('customerSearch')?.value||'').toLowerCase(); const list=$('customersList'); list.innerHTML=''; const matches=liveCustomers().filter(c=>[c.name,c.address,c.phone,c.email].join(' ').toLowerCase().includes(q)); if(matches.length===0){list.innerHTML='<p>No customers yet.</p>'; return;} matches.forEach(c=>{const div=document.createElement('div'); div.className='listitem '+(c.id===activeCustomerId?'active':''); div.innerHTML=`<b>${esc(c.name)||'Unnamed Customer'}</b><p>${esc(c.address)||'No address'}</p><p class="small">${liveQuotes(c).length} saved quote(s)</p><button class="btn" onclick="selectCustomer('${c.id}')">Open</button>`; list.appendChild(div);});}
+  function renderCustomerDetails(){const c=activeCustomer(); ['custName','custAddress','custPhone','custEmail','custNotes'].forEach(id=>$(id).value=''); $('customerQuotes').innerHTML='<p>Select or create a customer.</p>'; if(!c)return; $('custName').value=c.name||''; $('custAddress').value=c.address||''; $('custPhone').value=c.phone||''; $('custEmail').value=c.email||''; $('custNotes').value=c.notes||''; const qs=liveQuotes(c); $('customerQuotes').innerHTML=qs.length?qs.map(q=>`<div class="listitem ${q.id===activeQuoteId?'active':''}"><b>${esc(q.name||'Quote')}</b><p>${esc(q.status||'Draft')} • ${money(q.total||0)} • ${(q.trees||[]).reduce((sum,t)=>sum+(Math.floor(Number(t.qty||1))>0?Math.floor(Number(t.qty||1)):1),0)} tree(s)</p><div class="actions"><button class="btn" onclick="loadQuote('${q.id}')">View/Edit</button><button class="btn" onclick="duplicateQuote('${q.id}')">Duplicate</button><button class="btn bad" onclick="deleteQuote('${q.id}')">Delete</button></div></div>`).join(''):'<p>No saved quotes for this customer yet.</p>';}
 
   window.addTree=function(){currentQuote.trees.push({id:uid(),type:state.treeTypes[0],qty:1,height:'',dbh:'',canopy:'',size:'Auto',haul:'Yes',hazardCount:1,removalRisky:'No',services:{}}); scheduleSave(); renderAll();}
   window.removeTree=id=>{currentQuote.trees=currentQuote.trees.filter(t=>t.id!==id); scheduleSave(); renderAll();}
