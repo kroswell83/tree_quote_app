@@ -94,7 +94,7 @@
   </section>
 
   <section id="settings" class="hidden grid two">
-    <div class="card"><h2>Rates</h2><label>Standard hourly rate</label><input type="number" id="standardRate" oninput="updateSetting('standardRate', this.value)" /><label>Risky hourly rate</label><input type="number" id="riskyRate" oninput="updateSetting('riskyRate', this.value)" /><label>Haul away labor ratio</label><input type="number" step="0.1" id="haulRatio" oninput="updateSetting('haulRatio', this.value)" /><p class="small">Base ratio for all services. Each service can multiply this on the Service Hours card below.</p><label>Minimum job charge</label><input type="number" id="minCharge" oninput="updateSetting('minCharge', this.value)" /></div>
+    <div class="card"><h2>Rates</h2><label>Standard hourly rate</label><input type="number" id="standardRate" oninput="updateSetting('standardRate', this.value)" /><label>Risky hourly rate</label><input type="number" id="riskyRate" oninput="updateSetting('riskyRate', this.value)" /><label>Haul away labor ratio</label><input type="number" step="0.1" id="haulRatio" oninput="updateSetting('haulRatio', this.value)" /><p class="small">Base ratio for all services. Each service can multiply this on the Service Hours card below.</p><label>Minimum job charge</label><input type="number" id="minCharge" oninput="updateSetting('minCharge', this.value)" /><div class="divider"></div><label class="check"><input type="checkbox" id="deadwoodRisky" onchange="updateBoolSetting('deadwoodRisky', this.checked)"><span>Bill deadwood hours at the risky rate</span></label><label class="check" style="margin-top:6px"><input type="checkbox" id="hazardRisky" onchange="updateBoolSetting('hazardRisky', this.checked)"><span>Bill hazard limb hours at the risky rate</span></label><label class="check" style="margin-top:6px"><input type="checkbox" id="stormRisky" onchange="updateBoolSetting('stormRisky', this.checked)"><span>Bill storm cleanup hours at the risky rate</span></label><p class="small">Each applies the risky rate to only that service's hours. Everything else on the tree stays standard. Removals are set per tree instead, since it depends on the landing.</p></div>
     <div class="card"><h2>Customer Quote Notes</h2><p class="small">These notes appear on the customer-facing quote. Leave blank to hide the Notes section.</p><label>Quote notes</label><textarea id="quoteNotes" rows="5" oninput="updateTextSetting('quoteNotes', this.value)"></textarea></div>
     <div class="card"><h2>Tree Size Settings</h2><label>Small max height ft</label><input type="number" id="smallMaxHeight" oninput="updateSetting('smallMaxHeight', this.value)" /><label>Small max DBH inches</label><input type="number" id="smallMaxDBH" oninput="updateSetting('smallMaxDBH', this.value)" /><label>Small max canopy ft</label><input type="number" id="smallMaxCanopy" oninput="updateSetting('smallMaxCanopy', this.value)" /><label>Medium max height ft</label><input type="number" id="mediumMaxHeight" oninput="updateSetting('mediumMaxHeight', this.value)" /><label>Medium max DBH inches</label><input type="number" id="mediumMaxDBH" oninput="updateSetting('mediumMaxDBH', this.value)" /><label>Medium max canopy ft</label><input type="number" id="mediumMaxCanopy" oninput="updateSetting('mediumMaxCanopy', this.value)" /><p class="small">Anything above medium suggests Large.</p></div>
     <div class="card" style="grid-column:1/-1"><h2>Service Hours Per Tree</h2><p class="small">Internal only. These do not appear on the customer quote. <b>Haul ×</b> multiplies the base haul ratio for that service, so removals can haul more per hour worked than trimming.</p><div id="serviceSettings" class="grid"></div></div>
@@ -118,12 +118,21 @@
   import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
   import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js';
 
-  const services=['Tree Trimming / Pruning','Deadwood Removal','Canopy Raising / Clearance Pruning','Sucker / Sprout Removal','Hazard Limb Removal','Storm Cleanup','Tree Removal','Mistletoe Removal'];
+  const TRIM='Tree Trimming', HAZARD='Hazard Limb Removal', STORM='Storm Cleanup', REMOVAL='Tree Removal';
+  const services=[TRIM,HAZARD,STORM,REMOVAL,'Mistletoe Removal'];
+  const TRIM_SCOPES=['Deadwood only','Sprouts and suckers only','Standard','Heavy'];
+  // scopes that contain no deadwood work, so the risky-rate toggle skips them
+  const TRIM_NO_DEADWOOD=['Sprouts and suckers only'];
   const defaultTreeTypes=['Live Oak','Texas Red Oak / Spanish Oak','Post Oak','Bur Oak','Lacey Oak','Cedar Elm','Pecan','Ashe Juniper / Cedar','Hackberry','Texas Ash','Sycamore','Bald Cypress','Texas Mountain Laurel','Texas Redbud','Crepe Myrtle','Mexican Plum','Escarpment Black Cherry','Other'];
   const defaultHours={}; services.forEach(s=>defaultHours[s]={Small:0.5,Medium:1.25,Large:2.5});
-  defaultHours['Tree Removal']={Small:1.5,Medium:4,Large:8}; defaultHours['Mistletoe Removal']={Small:0.5,Medium:1,Large:2};
-  const defaultHaulMult={}; services.forEach(s=>defaultHaulMult[s]=1); defaultHaulMult['Tree Removal']=2;
-  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',smallMaxHeight:20,smallMaxDBH:8,smallMaxCanopy:15,mediumMaxHeight:45,mediumMaxDBH:20,mediumMaxCanopy:40,serviceHours:defaultHours,serviceHaulMult:defaultHaulMult};
+  defaultHours[REMOVAL]={Small:1.5,Medium:4,Large:8}; defaultHours['Mistletoe Removal']={Small:0.5,Medium:1,Large:2};
+  // Trim scopes built from the original per-service hours:
+  // Deadwood only = deadwood. Sprouts and suckers only = suckers. Standard = deadwood + canopy raise + suckers. Heavy = standard + reduction/thinning.
+  const defaultTrimScopes={'Deadwood only':{Small:0.5,Medium:1.25,Large:2.5},'Sprouts and suckers only':{Small:0.5,Medium:1.25,Large:2.5},'Standard':{Small:1.5,Medium:3.75,Large:7.5},'Heavy':{Small:2,Medium:5,Large:10}};
+  // How much of each trim scope is deadwood work, used when billing deadwood at the risky rate.
+  const defaultTrimDeadwood={Small:0.5,Medium:1.25,Large:2.5};
+  const defaultHaulMult={}; services.forEach(s=>defaultHaulMult[s]=1); defaultHaulMult[REMOVAL]=2;
+  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',smallMaxHeight:20,smallMaxDBH:8,smallMaxCanopy:15,mediumMaxHeight:45,mediumMaxDBH:20,mediumMaxCanopy:40,serviceHours:defaultHours,serviceHaulMult:defaultHaulMult,trimScopes:defaultTrimScopes,trimDeadwood:defaultTrimDeadwood,deadwoodRisky:false,hazardRisky:true,stormRisky:false};
   let state={settings:structuredClone(defaultSettings),treeTypes:[...defaultTreeTypes],customers:[],companyId:''};
   let currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   let activeCustomerId=null, activeQuoteId=null;
@@ -134,10 +143,54 @@
   function deepMerge(target,src){for(const k in src){if(src[k]&&typeof src[k]==='object'&&!Array.isArray(src[k])){target[k]=deepMerge(target[k]||{},src[k])}else target[k]=src[k]}return target}
   function saveLocal(){localStorage.setItem('treeQuoteSharedState',JSON.stringify(state));localStorage.setItem('treeQuoteCurrentQuote',JSON.stringify(currentQuote));localStorage.setItem('treeQuoteActiveCustomerId',activeCustomerId||'');}
   function loadLocal(){try{const s=JSON.parse(localStorage.getItem('treeQuoteSharedState')||'null'); if(s) state=deepMerge(state,s); const q=JSON.parse(localStorage.getItem('treeQuoteCurrentQuote')||'null'); if(q) currentQuote=q; activeCustomerId=localStorage.getItem('treeQuoteActiveCustomerId')||null;}catch(e){}}
-  function ensureHaulMult(){if(!state.settings.serviceHaulMult)state.settings.serviceHaulMult={}; services.forEach(s=>{if(state.settings.serviceHaulMult[s]===undefined)state.settings.serviceHaulMult[s]=(s==='Tree Removal'?2:1)});}
+  function ensureSettings(){
+    const s=state.settings;
+    if(!s.serviceHaulMult)s.serviceHaulMult={};
+    if(!s.serviceHours)s.serviceHours={};
+    services.forEach(n=>{
+      if(s.serviceHaulMult[n]===undefined)s.serviceHaulMult[n]=(n==='Tree Removal'?2:1);
+      if(!s.serviceHours[n])s.serviceHours[n]=clone(defaultHours[n]);
+    });
+    if(!s.trimScopes)s.trimScopes=clone(defaultTrimScopes);
+    TRIM_SCOPES.forEach(k=>{if(!s.trimScopes[k])s.trimScopes[k]=clone(defaultTrimScopes[k])});
+    if(!s.trimDeadwood)s.trimDeadwood=clone(defaultTrimDeadwood);
+    if(s.deadwoodRisky===undefined)s.deadwoodRisky=false;
+    if(s.hazardRisky===undefined)s.hazardRisky=true;
+    if(s.stormRisky===undefined)s.stormRisky=false;
+  }
+  // Old builds had 4 separate pruning checkboxes. Fold them into Tree Trimming with a scope.
+  const OLD_TRIM='Tree Trimming / Pruning', OLD_DEAD='Deadwood Removal', OLD_RAISE='Canopy Raising / Clearance Pruning', OLD_SUCKER='Sucker / Sprout Removal';
+  function migrateTree(t){
+    if(!t||!t.services)return;
+    const sv=t.services, had=k=>!!sv[k];
+    const oldPrune=had(OLD_TRIM)||had(OLD_DEAD)||had(OLD_RAISE)||had(OLD_SUCKER);
+    if(oldPrune){
+      sv[TRIM]=true;
+      if(!t.trimScope){
+        if(had(OLD_TRIM))t.trimScope='Heavy';
+        else if(had(OLD_RAISE)||(had(OLD_DEAD)&&had(OLD_SUCKER)))t.trimScope='Standard';
+        else if(had(OLD_DEAD))t.trimScope='Deadwood only';
+        else t.trimScope='Sprouts and suckers only';
+      }
+      // a tree migrated by an earlier build may still carry the separate sucker box
+      else if(t.trimScope==='Deadwood only'&&had(OLD_SUCKER))t.trimScope='Standard';
+    }
+    // an earlier build merged these two; split them back apart, defaulting to hazard limb
+    if(sv['Storm / Hazard Limb']){sv[HAZARD]=true; delete sv['Storm / Hazard Limb'];}
+    [OLD_TRIM,OLD_DEAD,OLD_RAISE,OLD_SUCKER].forEach(k=>delete sv[k]);
+    if(sv[TRIM]&&!t.trimScope)t.trimScope='Standard';
+    // the old whole-tree Risky flag only makes sense on removals now
+    if(t.risky!==undefined){if(t.removalRisky===undefined)t.removalRisky=(t.risky==='Yes'&&sv[REMOVAL])?'Yes':'No'; delete t.risky;}
+    if(t.removalRisky===undefined)t.removalRisky='No';
+    if(t.hazardCount===undefined)t.hazardCount=1;
+  }
+  function migrateAll(){
+    (currentQuote.trees||[]).forEach(migrateTree);
+    (state.customers||[]).forEach(c=>(c.quotes||[]).forEach(q=>(q.trees||[]).forEach(migrateTree)));
+  }
   function scheduleSave(){saveLocal(); if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,700)}
   window.saveNow=async function(){saveLocal(); if(firebaseReady&&user&&accessGranted&&state.companyId){try{await setDoc(doc(db,'companies',state.companyId,'appData','main'),{state,updatedAt:serverTimestamp(),updatedBy:user.email},{merge:true});$('syncStatus').textContent='Synced to company '+state.companyId+'.';$('syncStatus').className='status online'}catch(e){$('syncStatus').textContent='Sync failed: '+e.message;$('syncStatus').className='status offline'}}}
-  async function loadCloud(){if(!firebaseReady||!user||!accessGranted||!state.companyId)return; const companyId=state.companyId; const ref=doc(db,'companies',companyId,'appData','main'); const snap=await getDoc(ref); if(snap.exists()&&snap.data().state){state=deepMerge(state,snap.data().state); state.companyId=companyId; ensureHaulMult(); saveLocal(); renderAll(); $('syncStatus').textContent='Loaded shared company data: '+companyId; $('syncStatus').className='status online'}else{await saveNow();}}
+  async function loadCloud(){if(!firebaseReady||!user||!accessGranted||!state.companyId)return; const companyId=state.companyId; const ref=doc(db,'companies',companyId,'appData','main'); const snap=await getDoc(ref); if(snap.exists()&&snap.data().state){state=deepMerge(state,snap.data().state); state.companyId=companyId; ensureSettings(); migrateAll(); saveLocal(); renderAll(); $('syncStatus').textContent='Loaded shared company data: '+companyId; $('syncStatus').className='status online'}else{await saveNow();}}
   function setAuthMessage(msg,kind='small'){const box=$('authMessage'); if(!box)return; box.textContent=msg; box.className='auth-msg '+kind;}
   function showApp(allowed){$('authGate').classList.toggle('hidden',!!allowed); $('appShell').classList.toggle('hidden',!allowed);}
   function syncLoginCompanyId(){const v=($('loginCompanyId')?.value||'').trim(); if(v){state.companyId=v; saveLocal();} return state.companyId;}
@@ -163,7 +216,7 @@
   function renderCustomers(){const q=($('customerSearch')?.value||'').toLowerCase(); const list=$('customersList'); list.innerHTML=''; const matches=state.customers.filter(c=>[c.name,c.address,c.phone,c.email].join(' ').toLowerCase().includes(q)); if(matches.length===0){list.innerHTML='<p>No customers yet.</p>'; return;} matches.forEach(c=>{const div=document.createElement('div'); div.className='listitem '+(c.id===activeCustomerId?'active':''); div.innerHTML=`<b>${esc(c.name)||'Unnamed Customer'}</b><p>${esc(c.address)||'No address'}</p><p class="small">${(c.quotes||[]).length} saved quote(s)</p><button class="btn" onclick="selectCustomer('${c.id}')">Open</button>`; list.appendChild(div);});}
   function renderCustomerDetails(){const c=activeCustomer(); ['custName','custAddress','custPhone','custEmail','custNotes'].forEach(id=>$(id).value=''); $('customerQuotes').innerHTML='<p>Select or create a customer.</p>'; if(!c)return; $('custName').value=c.name||''; $('custAddress').value=c.address||''; $('custPhone').value=c.phone||''; $('custEmail').value=c.email||''; $('custNotes').value=c.notes||''; const qs=c.quotes||[]; $('customerQuotes').innerHTML=qs.length?qs.map(q=>`<div class="listitem ${q.id===activeQuoteId?'active':''}"><b>${esc(q.name||'Quote')}</b><p>${esc(q.status||'Draft')} • ${money(q.total||0)} • ${(q.trees||[]).reduce((sum,t)=>sum+(Math.floor(Number(t.qty||1))>0?Math.floor(Number(t.qty||1)):1),0)} tree(s)</p><div class="actions"><button class="btn" onclick="loadQuote('${q.id}')">View/Edit</button><button class="btn" onclick="duplicateQuote('${q.id}')">Duplicate</button><button class="btn bad" onclick="deleteQuote('${q.id}')">Delete</button></div></div>`).join(''):'<p>No saved quotes for this customer yet.</p>';}
 
-  window.addTree=function(){currentQuote.trees.push({id:uid(),type:state.treeTypes[0],qty:1,height:'',dbh:'',canopy:'',size:'Auto',risky:'No',haul:'Yes',services:{}}); scheduleSave(); renderAll();}
+  window.addTree=function(){currentQuote.trees.push({id:uid(),type:state.treeTypes[0],qty:1,height:'',dbh:'',canopy:'',size:'Auto',haul:'Yes',hazardCount:1,removalRisky:'No',services:{}}); scheduleSave(); renderAll();}
   window.removeTree=id=>{currentQuote.trees=currentQuote.trees.filter(t=>t.id!==id); scheduleSave(); renderAll();}
   window.updateTree=(id,field,value)=>{const t=currentQuote.trees.find(x=>x.id===id); if(!t)return; t[field]=value; scheduleSave(); renderAll();}
   window.toggleTreeCollapsed=id=>{const t=currentQuote.trees.find(x=>x.id===id); if(!t)return; t.collapsed=!t.collapsed; scheduleSave(); renderAll();}
@@ -172,6 +225,9 @@
   window.updateTextSetting=(field,value)=>{state.settings[field]=value; scheduleSave(); renderAll();}
   window.updateServiceHours=(service,size,value)=>{state.settings.serviceHours[service][size]=Number(value); scheduleSave(); renderAll();}
   window.updateServiceHaulMult=(service,value)=>{state.settings.serviceHaulMult[service]=Number(value); scheduleSave(); renderAll();}
+  window.updateBoolSetting=(field,value)=>{state.settings[field]=!!value; scheduleSave(); renderAll();}
+  window.updateTrimScope=(scope,size,value)=>{state.settings.trimScopes[scope][size]=Number(value); scheduleSave(); renderAll();}
+  window.updateTrimDeadwood=(size,value)=>{state.settings.trimDeadwood[size]=Number(value); scheduleSave(); renderAll();}
   window.addTreeType=function(){const name=$('newTreeName').value.trim(); if(!name)return; if(!state.treeTypes.includes(name))state.treeTypes.splice(Math.max(0,state.treeTypes.length-1),0,name); $('newTreeName').value=''; scheduleSave(); renderAll();}
   window.deleteTreeType=function(name){if(name==='Other')return alert('Keep Other for custom jobs.'); state.treeTypes=state.treeTypes.filter(t=>t!==name); currentQuote.trees.forEach(t=>{if(t.type===name)t.type='Other'}); scheduleSave(); renderAll();}
   function suggestedSize(t){const s=state.settings; const h=Number(t.height||0),d=Number(t.dbh||0),c=Number(t.canopy||0); const large=(h&&h>s.mediumMaxHeight)||(d&&d>s.mediumMaxDBH)||(c&&c>s.mediumMaxCanopy); if(large)return'Large'; const small=(h&&h<=s.smallMaxHeight||!h)&&(d&&d<=s.smallMaxDBH||!d)&&(c&&c<=s.smallMaxCanopy||!c); if(small&&(h||d||c))return'Small'; return'Medium';}
@@ -179,11 +235,40 @@
   function treeQty(t){const q=Math.floor(Number(t.qty||1)); return q>0?q:1}
   function totalTreeCount(){return currentQuote.trees.reduce((sum,t)=>sum+treeQty(t),0)}
   function haulMult(s){const m=state.settings.serviceHaulMult?.[s]; return m===undefined?1:Number(m)}
-  function treeCalc(t){const size=actualSize(t); const qty=treeQty(t); let perTreeBase=0, perTreeHaulBase=0; services.forEach(s=>{if(t.services&&t.services[s]){const h=Number(state.settings.serviceHours[s]?.[size]||0); perTreeBase+=h; perTreeHaulBase+=h*haulMult(s);}}); const rate=t.risky==='Yes'?state.settings.riskyRate:state.settings.standardRate; const perTreeLabor=perTreeBase*rate; const perTreeHaulHours=t.haul==='Yes'?perTreeHaulBase*state.settings.haulRatio:0; const perTreeHaulLabor=perTreeHaulHours*state.settings.standardRate; const base=perTreeBase*qty; const haulHours=perTreeHaulHours*qty; const treeLabor=perTreeLabor*qty; const haulLabor=perTreeHaulLabor*qty; return{size,qty,perTreeBase,perTreeHaulHours,perTreeTotal:perTreeLabor+perTreeHaulLabor,base,haulHours,treeLabor,haulLabor,total:treeLabor+haulLabor};}
+  function trimScopeOf(t){const sc=t.trimScope||'Standard'; return state.settings.trimScopes[sc]?sc:'Standard'}
+  function serviceHoursFor(t,s,size){
+    if(s===TRIM)return Number(state.settings.trimScopes[trimScopeOf(t)]?.[size]||0);
+    return Number(state.settings.serviceHours[s]?.[size]||0);
+  }
+  function hazardCount(t){const n=Math.floor(Number(t.hazardCount||1)); return n>0?n:1}
+  function treeCalc(t){
+    const size=actualSize(t); const qty=treeQty(t);
+    const S=state.settings, std=Number(S.standardRate||0), rsk=Number(S.riskyRate||0);
+    let perTreeBase=0, perTreeHaulBase=0, riskyHrs=0, perTreeLabor=0;
+    services.forEach(s=>{
+      if(!(t.services&&t.services[s]))return;
+      const units=(s===HAZARD)?hazardCount(t):1;
+      const h=serviceHoursFor(t,s,size)*units;
+      perTreeBase+=h; perTreeHaulBase+=h*haulMult(s);
+      // work out how much of this service's time earns the risky rate
+      let rh=0;
+      if(s===TRIM){ if(S.deadwoodRisky&&!TRIM_NO_DEADWOOD.includes(trimScopeOf(t)))rh=Math.min(Number(S.trimDeadwood?.[size]||0),h); }
+      else if(s===HAZARD){ if(S.hazardRisky)rh=h; }
+      else if(s===STORM){ if(S.stormRisky)rh=h; }
+      else if(s===REMOVAL){ if(t.removalRisky==='Yes')rh=h; }
+      riskyHrs+=rh;
+      perTreeLabor+=rh*rsk+(h-rh)*std;
+    });
+    const perTreeHaulHours=t.haul==='Yes'?perTreeHaulBase*Number(S.haulRatio||0):0;
+    const perTreeHaulLabor=perTreeHaulHours*std;
+    const base=perTreeBase*qty; const haulHours=perTreeHaulHours*qty;
+    const treeLabor=perTreeLabor*qty; const haulLabor=perTreeHaulLabor*qty;
+    return{size,qty,perTreeBase,perTreeHaulHours,riskyHrs:riskyHrs*qty,riskyUplift:(rsk-std)*riskyHrs*qty,perTreeTotal:perTreeLabor+perTreeHaulLabor,base,haulHours,treeLabor,haulLabor,total:treeLabor+haulLabor};
+  }
   function allCalc(){let base=0,haul=0,treeLabor=0,haulLabor=0; currentQuote.trees.forEach(t=>{const c=treeCalc(t);base+=c.base;haul+=c.haulHours;treeLabor+=c.treeLabor;haulLabor+=c.haulLabor}); const subtotal=treeLabor+haulLabor; return{base,haul,treeLabor,haulLabor,subtotal,total:Math.max(subtotal,state.settings.minCharge),treeCount:totalTreeCount()}}
   function selectedServices(){const set=new Set(); currentQuote.trees.forEach(t=>services.forEach(s=>{if(t.services&&t.services[s])set.add(s)})); return [...set];}
   function makeCustomerQuote(){const c=activeCustomer(); const calc=allCalc(); const svc=selectedServices(); let lines=[]; lines.push('TREE SERVICE QUOTE'); lines.push(''); if(c){lines.push('Customer: '+(c.name||'')); lines.push('Property: '+(c.address||'')); if(c.phone)lines.push('Phone: '+c.phone); if(c.email)lines.push('Email: '+c.email); lines.push('');} lines.push('Quote: '+(currentQuote.name||'Tree Service Quote')); lines.push('Status: '+(currentQuote.status||'Draft')); lines.push(''); lines.push('Services Included:'); if(svc.length)svc.forEach(s=>lines.push('- '+s)); else lines.push('- No services selected'); lines.push(''); lines.push('Tree count: '+totalTreeCount()); lines.push('Debris haul away: '+(currentQuote.trees.some(t=>t.haul==='Yes')?'Included where selected':'Not included')); lines.push(''); lines.push('Quote Price: '+money(calc.total)); const notes=String(state.settings.quoteNotes||'').trim(); if(notes){lines.push(''); lines.push('Notes:'); notes.split(/\r?\n/).filter(Boolean).forEach(n=>lines.push('- '+n.replace(/^[-•]\s*/,'')));} return lines.join('\n');}
-  function makeInternalSummary(){const calc=allCalc(); let lines=['INTERNAL QUOTE SUMMARY','Total: '+money(calc.total),'Tree labor: '+money(calc.treeLabor),'Haul away labor: '+money(calc.haulLabor),'Tree count: '+calc.treeCount,'Tree hours: '+calc.base.toFixed(2),'Haul away hours: '+calc.haul.toFixed(2),'']; currentQuote.trees.forEach((t,i)=>{const tc=treeCalc(t); const sv=services.filter(s=>t.services&&t.services[s]).join(', ')||'No services selected'; lines.push(`Tree ${i+1}: ${t.type} | Qty: ${tc.qty} | ${tc.size} | Risky: ${t.risky} | Haul: ${t.haul} | Hours: ${tc.base.toFixed(2)} | Haul hrs: ${tc.haulHours.toFixed(2)} | Total: ${money(tc.total)} | ${sv}`)}); return lines.join('\n');}
+  function makeInternalSummary(){const calc=allCalc(); let lines=['INTERNAL QUOTE SUMMARY','Total: '+money(calc.total),'Tree labor: '+money(calc.treeLabor),'Haul away labor: '+money(calc.haulLabor),'Tree count: '+calc.treeCount,'Tree hours: '+calc.base.toFixed(2),'Haul away hours: '+calc.haul.toFixed(2),'']; currentQuote.trees.forEach((t,i)=>{const tc=treeCalc(t); const sv=services.filter(s=>t.services&&t.services[s]).map(s=>s===TRIM?`${s} (${trimScopeOf(t)})`:s).join(', ')||'No services selected'; lines.push(`Tree ${i+1}: ${t.type} | Qty: ${tc.qty} | ${tc.size} | Haul: ${t.haul} | Hours: ${tc.base.toFixed(2)} | Haul hrs: ${tc.haulHours.toFixed(2)} | Total: ${money(tc.total)}${tc.riskyHrs>0?` | ${tc.riskyHrs.toFixed(2)}h risky (+${money(tc.riskyUplift)})`:''} | ${sv}`)}); return lines.join('\n');}
   window.copyCustomerQuote=async()=>{await navigator.clipboard.writeText(makeCustomerQuote()).catch(()=>{}); alert('Customer quote copied.');}
   window.printCustomerQuote=function(){const w=window.open('','_blank'); w.document.write('<pre style="font-family:Arial;white-space:pre-wrap;font-size:14px">'+esc(makeCustomerQuote())+'</pre>'); w.document.close(); w.print();}
   window.resetQuote=function(){if(confirm('Clear current quote?')){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; activeQuoteId=null; scheduleSave(); renderAll();}}
@@ -200,7 +285,10 @@
       const div=document.createElement('div');
       div.className='card tree-card '+(isCollapsed?'collapsed':'');
       const opts=state.treeTypes.map(x=>`<option ${x===t.type?'selected':''}>${esc(x)}</option>`).join('');
-      const selected=services.filter(s=>t.services&&t.services[s]);
+      const trimOn=!!(t.services&&t.services[TRIM]);
+      const hazardOn=!!(t.services&&t.services[HAZARD]);
+      const removalOn=!!(t.services&&t.services[REMOVAL]);
+      const selected=services.filter(s=>t.services&&t.services[s]).map(s=>s===TRIM?`${s} (${trimScopeOf(t)})`:s===HAZARD&&hazardCount(t)>1?`${s} x${hazardCount(t)}`:s);
       const serviceSummary=selected.length?selected.join(', '):'No services selected';
       const svc=services.map(s=>`<label class="check"><input type="checkbox" ${t.services&&t.services[s]?'checked':''} onchange="toggleService('${t.id}','${attr(s)}',this.checked)"><span>${esc(s)}</span></label>`).join('');
       div.innerHTML=`
@@ -211,27 +299,41 @@
           </div>
           <span class="badge">Qty ${c.qty} • ${c.size} • ${money(c.total)}</span>
         </div>
-        <div class="tree-summary">${esc(t.type||'Tree')} • ${esc(serviceSummary)}${t.risky==='Yes'?' • Risky':''}${t.haul==='Yes'?' • Haul away':''}</div>
+        <div class="tree-summary">${esc(t.type||'Tree')} • ${esc(serviceSummary)}${t.haul==='Yes'?' • Haul away':''}</div>
         <div class="tree-details ${isCollapsed?'hidden':''}">
           <label>Tree type</label><select onchange="updateTree('${t.id}','type',this.value)">${opts}</select>
           <div class="row"><div><label>Quantity of similar trees</label><input type="number" min="1" step="1" value="${t.qty||1}" oninput="updateTree('${t.id}','qty',this.value)"></div><div><label>Height ft</label><input type="number" value="${t.height||''}" oninput="updateTree('${t.id}','height',this.value)"></div></div>
           <div class="row"><div><label>DBH inches</label><input type="number" value="${t.dbh||''}" oninput="updateTree('${t.id}','dbh',this.value)"></div><div><label>Canopy spread ft</label><input type="number" value="${t.canopy||''}" oninput="updateTree('${t.id}','canopy',this.value)"></div></div>
-          <div class="row"><div><label>Size</label><select onchange="updateTree('${t.id}','size',this.value)"><option ${t.size==='Auto'?'selected':''}>Auto</option><option ${t.size==='Small'?'selected':''}>Small</option><option ${t.size==='Medium'?'selected':''}>Medium</option><option ${t.size==='Large'?'selected':''}>Large</option></select></div><div><label>Risky?</label><select onchange="updateTree('${t.id}','risky',this.value)"><option ${t.risky==='No'?'selected':''}>No</option><option ${t.risky==='Yes'?'selected':''}>Yes</option></select></div></div>
-          <div class="row"><div><label>Haul away?</label><select onchange="updateTree('${t.id}','haul',this.value)"><option ${t.haul==='Yes'?'selected':''}>Yes</option><option ${t.haul==='No'?'selected':''}>No</option></select></div></div>
+          <div class="row"><div><label>Size</label><select onchange="updateTree('${t.id}','size',this.value)"><option ${t.size==='Auto'?'selected':''}>Auto</option><option ${t.size==='Small'?'selected':''}>Small</option><option ${t.size==='Medium'?'selected':''}>Medium</option><option ${t.size==='Large'?'selected':''}>Large</option></select></div><div><label>Haul away?</label><select onchange="updateTree('${t.id}','haul',this.value)"><option ${t.haul==='Yes'?'selected':''}>Yes</option><option ${t.haul==='No'?'selected':''}>No</option></select></div></div>
           <label>Services</label><div class="service-grid">${svc}</div>
+          ${trimOn?`<label>Trim scope</label><select onchange="updateTree('${t.id}','trimScope',this.value)">${TRIM_SCOPES.map(k=>`<option ${k===trimScopeOf(t)?'selected':''}>${esc(k)}</option>`).join('')}</select>`:''}
+          ${hazardOn?`<label>Number of hazard limbs</label><input type="number" min="1" step="1" value="${hazardCount(t)}" oninput="updateTree('${t.id}','hazardCount',this.value)">`:''}
+          ${removalOn?`<label>Difficult landing or tight drop zone?</label><select onchange="updateTree('${t.id}','removalRisky',this.value)"><option ${t.removalRisky!=='Yes'?'selected':''}>No</option><option ${t.removalRisky==='Yes'?'selected':''}>Yes</option></select><p class="small">Yes bills the removal hours at the risky rate. Trimming and haul are not affected.</p>`:''}
           <div class="divider"></div>
-          <div class="tree-actions"><p class="small" style="flex:1">Internal: qty ${c.qty} • tree hrs ${c.base.toFixed(2)} • haul hrs ${c.haulHours.toFixed(2)} • ${t.risky==='Yes'?'risky rate':'standard rate'}</p><button class="btn bad" onclick="removeTree('${t.id}')">Remove Tree</button></div>
+          <div class="tree-actions"><p class="small" style="flex:1">Internal: qty ${c.qty} • tree hrs ${c.base.toFixed(2)} • haul hrs ${c.haulHours.toFixed(2)} ${c.riskyHrs>0?` • ${c.riskyHrs.toFixed(2)}h at risky rate (+${money(c.riskyUplift)})`:' • all standard rate'}</p><button class="btn bad" onclick="removeTree('${t.id}')">Remove Tree</button></div>
         </div>`;
       list.appendChild(div);
     });
   }
-  function renderSettings(){['standardRate','riskyRate','haulRatio','minCharge','smallMaxHeight','smallMaxDBH','smallMaxCanopy','mediumMaxHeight','mediumMaxDBH','mediumMaxCanopy'].forEach(id=>$(id).value=state.settings[id]); if($('quoteNotes'))$('quoteNotes').value=state.settings.quoteNotes||''; const box=$('serviceSettings'); box.innerHTML=''; services.forEach(s=>{const d=document.createElement('div'); d.className='card'; d.innerHTML=`<b>${esc(s)}</b><div class="three"><div><label>Small</label><input type="number" step="0.25" value="${state.settings.serviceHours[s].Small}" oninput="updateServiceHours('${attr(s)}','Small',this.value)"></div><div><label>Medium</label><input type="number" step="0.25" value="${state.settings.serviceHours[s].Medium}" oninput="updateServiceHours('${attr(s)}','Medium',this.value)"></div><div><label>Large</label><input type="number" step="0.25" value="${state.settings.serviceHours[s].Large}" oninput="updateServiceHours('${attr(s)}','Large',this.value)"></div></div><label>Haul × (multiplies the base haul ratio)</label><input type="number" step="0.25" value="${haulMult(s)}" oninput="updateServiceHaulMult('${attr(s)}',this.value)">`; box.appendChild(d);});}
+  function renderSettings(){['standardRate','riskyRate','haulRatio','minCharge','smallMaxHeight','smallMaxDBH','smallMaxCanopy','mediumMaxHeight','mediumMaxDBH','mediumMaxCanopy'].forEach(id=>$(id).value=state.settings[id]); if($('quoteNotes'))$('quoteNotes').value=state.settings.quoteNotes||''; ['deadwoodRisky','hazardRisky','stormRisky'].forEach(k=>{if($(k))$(k).checked=!!state.settings[k]});
+    const sizes=['Small','Medium','Large'];
+    const box=$('serviceSettings'); box.innerHTML='';
+    services.forEach(s=>{
+      const d=document.createElement('div'); d.className='card';
+      if(s===TRIM){
+        const scopeRows=TRIM_SCOPES.map(k=>`<b class="small" style="color:var(--ink)">${esc(k)}</b><div class="three">${sizes.map(z=>`<div><label>${z}</label><input type="number" step="0.25" value="${state.settings.trimScopes[k][z]}" oninput="updateTrimScope('${attr(k)}','${z}',this.value)"></div>`).join('')}</div>`).join('');
+        d.innerHTML=`<b>${esc(s)}</b><p class="small">Deadwood only = deadwood. Sprouts and suckers only = suckers. Standard = deadwood + canopy raise + suckers. Heavy = standard + reduction and thinning.</p>${scopeRows}<div class="divider"></div><b class="small" style="color:var(--ink)">Deadwood hours inside each scope</b><p class="small">Only used when deadwood is billed at the risky rate. Capped at the scope total, and skipped on Sprouts and suckers only.</p><div class="three">${sizes.map(z=>`<div><label>${z}</label><input type="number" step="0.25" value="${state.settings.trimDeadwood[z]}" oninput="updateTrimDeadwood('${z}',this.value)"></div>`).join('')}</div><label>Haul × (multiplies the base haul ratio)</label><input type="number" step="0.25" value="${haulMult(s)}" oninput="updateServiceHaulMult('${attr(s)}',this.value)">`;
+      } else {
+        d.innerHTML=`<b>${esc(s)}</b><div class="three">${sizes.map(z=>`<div><label>${z}</label><input type="number" step="0.25" value="${state.settings.serviceHours[s][z]}" oninput="updateServiceHours('${attr(s)}','${z}',this.value)"></div>`).join('')}</div><label>Haul × (multiplies the base haul ratio)</label><input type="number" step="0.25" value="${haulMult(s)}" oninput="updateServiceHaulMult('${attr(s)}',this.value)">`;
+      }
+      box.appendChild(d);
+    });}
   function renderTreeTypes(){$('treeTypesList').innerHTML=state.treeTypes.map(t=>`<div class="check"><span style="flex:1">${esc(t)}</span><button class="btn bad" onclick="deleteTreeType('${attr(t)}')">Delete</button></div>`).join('')}
   function renderSummary(){const c=allCalc(); $('quoteName').value=currentQuote.name||''; $('quoteStatus').value=currentQuote.status||'Draft'; $('grandTotal').textContent=money(c.total); $('treeCount').textContent=c.treeCount+' trees'; $('hoursTotal').textContent=c.base.toFixed(2)+' tree hrs'; $('haulHoursTotal').textContent=c.haul.toFixed(2)+' haul hrs'; $('treeLabor').textContent=money(c.treeLabor); $('haulLabor').textContent=money(c.haulLabor); $('minChargeText').textContent=money(state.settings.minCharge); $('customerQuoteText').value=makeCustomerQuote(); $('internalSummaryText').value=makeInternalSummary();}
   function renderAll(){if($('companyId'))$('companyId').value=state.companyId||''; if($('loginCompanyId'))$('loginCompanyId').value=state.companyId||''; renderCustomers(); renderCustomerDetails(); renderTrees(); renderSettings(); renderTreeTypes(); renderSummary();}
   function esc(s){return String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
   function attr(s){return String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;')}
-  loadLocal(); ensureHaulMult(); if(state.customers.length===0){state.customers.push({id:'samplecustomer',name:'Sample Customer',address:'123 Live Oak Dr, Georgetown, TX',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}); activeCustomerId='samplecustomer'} if(currentQuote.trees.length===0)currentQuote.trees.push({id:'sampletree',type:'Live Oak',qty:1,height:35,dbh:18,canopy:35,size:'Auto',risky:'No',haul:'Yes',services:{'Deadwood Removal':true,'Canopy Raising / Clearance Pruning':true,'Sucker / Sprout Removal':true}}); setupFirebase(); renderAll();
+  loadLocal(); ensureSettings(); migrateAll(); if(state.customers.length===0){state.customers.push({id:'samplecustomer',name:'Sample Customer',address:'123 Live Oak Dr, Georgetown, TX',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}); activeCustomerId='samplecustomer'} if(currentQuote.trees.length===0)currentQuote.trees.push({id:'sampletree',type:'Live Oak',qty:1,height:35,dbh:18,canopy:35,size:'Auto',haul:'Yes',hazardCount:1,removalRisky:'No',trimScope:'Standard',services:{[TRIM]:true}}); setupFirebase(); renderAll();
 </script>
 </body>
 </html>
