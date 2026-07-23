@@ -123,10 +123,8 @@
   const TRIM_SCOPES=['Deadwood only','Sprouts and suckers only','Standard','Heavy'];
   // scopes that contain no deadwood work, so the risky-rate toggle skips them
   const TRIM_NO_DEADWOOD=['Sprouts and suckers only'];
-  // what the estimator sees in the dropdown. Keys above stay the stored value.
+  // only the combined scopes need spelling out; the other two say what they are
   const TRIM_SCOPE_LABELS={
-    'Deadwood only':'Deadwood only (dead limbs out)',
-    'Sprouts and suckers only':'Sprouts & suckers only (base + water sprouts)',
     'Standard':'Standard (deadwood + canopy raise + suckers)',
     'Heavy':'Heavy (standard + thinning & reduction)'
   };
