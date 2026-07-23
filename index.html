@@ -132,7 +132,8 @@
   // How much of each trim scope is deadwood work, used when billing deadwood at the risky rate.
   const defaultTrimDeadwood={Small:0.5,Medium:1.25,Large:2.5};
   const defaultHaulMult={}; services.forEach(s=>defaultHaulMult[s]=1); defaultHaulMult[REMOVAL]=2;
-  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',smallMaxHeight:20,smallMaxDBH:8,smallMaxCanopy:15,mediumMaxHeight:45,mediumMaxDBH:20,mediumMaxCanopy:40,serviceHours:defaultHours,serviceHaulMult:defaultHaulMult,trimScopes:defaultTrimScopes,trimDeadwood:defaultTrimDeadwood,deadwoodRisky:false,hazardRisky:true,stormRisky:false};
+  const defaultSpecies={}; defaultTreeTypes.forEach(t=>defaultSpecies[t]=1);
+  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',smallMaxHeight:20,smallMaxDBH:8,smallMaxCanopy:15,mediumMaxHeight:45,mediumMaxDBH:20,mediumMaxCanopy:40,serviceHours:defaultHours,serviceHaulMult:defaultHaulMult,trimScopes:defaultTrimScopes,trimDeadwood:defaultTrimDeadwood,deadwoodRisky:false,hazardRisky:true,stormRisky:false,species:defaultSpecies};
   let state={settings:structuredClone(defaultSettings),treeTypes:[...defaultTreeTypes],customers:[],companyId:''};
   let currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   let activeCustomerId=null, activeQuoteId=null;
@@ -157,6 +158,8 @@
     if(s.deadwoodRisky===undefined)s.deadwoodRisky=false;
     if(s.hazardRisky===undefined)s.hazardRisky=true;
     if(s.stormRisky===undefined)s.stormRisky=false;
+    if(!s.species)s.species={};
+    (state.treeTypes||[]).forEach(t=>{if(s.species[t]===undefined)s.species[t]=1});
   }
   // Old builds had 4 separate pruning checkboxes. Fold them into Tree Trimming with a scope.
   const OLD_TRIM='Tree Trimming / Pruning', OLD_DEAD='Deadwood Removal', OLD_RAISE='Canopy Raising / Clearance Pruning', OLD_SUCKER='Sucker / Sprout Removal';
@@ -225,11 +228,12 @@
   window.updateTextSetting=(field,value)=>{state.settings[field]=value; scheduleSave(); renderAll();}
   window.updateServiceHours=(service,size,value)=>{state.settings.serviceHours[service][size]=Number(value); scheduleSave(); renderAll();}
   window.updateServiceHaulMult=(service,value)=>{state.settings.serviceHaulMult[service]=Number(value); scheduleSave(); renderAll();}
+  window.updateSpecies=(name,value)=>{const n=Number(value); state.settings.species[name]=(isFinite(n)&&n>0)?n:1; scheduleSave(); renderAll();}
   window.updateBoolSetting=(field,value)=>{state.settings[field]=!!value; scheduleSave(); renderAll();}
   window.updateTrimScope=(scope,size,value)=>{state.settings.trimScopes[scope][size]=Number(value); scheduleSave(); renderAll();}
   window.updateTrimDeadwood=(size,value)=>{state.settings.trimDeadwood[size]=Number(value); scheduleSave(); renderAll();}
-  window.addTreeType=function(){const name=$('newTreeName').value.trim(); if(!name)return; if(!state.treeTypes.includes(name))state.treeTypes.splice(Math.max(0,state.treeTypes.length-1),0,name); $('newTreeName').value=''; scheduleSave(); renderAll();}
-  window.deleteTreeType=function(name){if(name==='Other')return alert('Keep Other for custom jobs.'); state.treeTypes=state.treeTypes.filter(t=>t!==name); currentQuote.trees.forEach(t=>{if(t.type===name)t.type='Other'}); scheduleSave(); renderAll();}
+  window.addTreeType=function(){const name=$('newTreeName').value.trim(); if(!name)return; if(!state.treeTypes.includes(name))state.treeTypes.splice(Math.max(0,state.treeTypes.length-1),0,name); if(state.settings.species[name]===undefined)state.settings.species[name]=1; $('newTreeName').value=''; scheduleSave(); renderAll();}
+  window.deleteTreeType=function(name){if(name==='Other')return alert('Keep Other for custom jobs.'); state.treeTypes=state.treeTypes.filter(t=>t!==name); delete state.settings.species[name]; currentQuote.trees.forEach(t=>{if(t.type===name)t.type='Other'}); scheduleSave(); renderAll();}
   function suggestedSize(t){const s=state.settings; const h=Number(t.height||0),d=Number(t.dbh||0),c=Number(t.canopy||0); const large=(h&&h>s.mediumMaxHeight)||(d&&d>s.mediumMaxDBH)||(c&&c>s.mediumMaxCanopy); if(large)return'Large'; const small=(h&&h<=s.smallMaxHeight||!h)&&(d&&d<=s.smallMaxDBH||!d)&&(c&&c<=s.smallMaxCanopy||!c); if(small&&(h||d||c))return'Small'; return'Medium';}
   function actualSize(t){return t.size==='Auto'?suggestedSize(t):t.size}
   function treeQty(t){const q=Math.floor(Number(t.qty||1)); return q>0?q:1}
@@ -240,19 +244,20 @@
     if(s===TRIM)return Number(state.settings.trimScopes[trimScopeOf(t)]?.[size]||0);
     return Number(state.settings.serviceHours[s]?.[size]||0);
   }
+  function speciesFactor(t){const f=state.settings.species?.[t.type]; const n=Number(f); return (f===undefined||!isFinite(n)||n<=0)?1:n}
   function hazardCount(t){const n=Math.floor(Number(t.hazardCount||1)); return n>0?n:1}
   function treeCalc(t){
     const size=actualSize(t); const qty=treeQty(t);
-    const S=state.settings, std=Number(S.standardRate||0), rsk=Number(S.riskyRate||0);
+    const S=state.settings, std=Number(S.standardRate||0), rsk=Number(S.riskyRate||0), sp=speciesFactor(t);
     let perTreeBase=0, perTreeHaulBase=0, riskyHrs=0, perTreeLabor=0;
     services.forEach(s=>{
       if(!(t.services&&t.services[s]))return;
       const units=(s===HAZARD)?hazardCount(t):1;
-      const h=serviceHoursFor(t,s,size)*units;
+      const h=serviceHoursFor(t,s,size)*units*sp;
       perTreeBase+=h; perTreeHaulBase+=h*haulMult(s);
       // work out how much of this service's time earns the risky rate
       let rh=0;
-      if(s===TRIM){ if(S.deadwoodRisky&&!TRIM_NO_DEADWOOD.includes(trimScopeOf(t)))rh=Math.min(Number(S.trimDeadwood?.[size]||0),h); }
+      if(s===TRIM){ if(S.deadwoodRisky&&!TRIM_NO_DEADWOOD.includes(trimScopeOf(t)))rh=Math.min(Number(S.trimDeadwood?.[size]||0)*sp,h); }
       else if(s===HAZARD){ if(S.hazardRisky)rh=h; }
       else if(s===STORM){ if(S.stormRisky)rh=h; }
       else if(s===REMOVAL){ if(t.removalRisky==='Yes')rh=h; }
@@ -263,7 +268,7 @@
     const perTreeHaulLabor=perTreeHaulHours*std;
     const base=perTreeBase*qty; const haulHours=perTreeHaulHours*qty;
     const treeLabor=perTreeLabor*qty; const haulLabor=perTreeHaulLabor*qty;
-    return{size,qty,perTreeBase,perTreeHaulHours,riskyHrs:riskyHrs*qty,riskyUplift:(rsk-std)*riskyHrs*qty,perTreeTotal:perTreeLabor+perTreeHaulLabor,base,haulHours,treeLabor,haulLabor,total:treeLabor+haulLabor};
+    return{size,qty,sp,perTreeBase,perTreeHaulHours,riskyHrs:riskyHrs*qty,riskyUplift:(rsk-std)*riskyHrs*qty,perTreeTotal:perTreeLabor+perTreeHaulLabor,base,haulHours,treeLabor,haulLabor,total:treeLabor+haulLabor};
   }
   function allCalc(){let base=0,haul=0,treeLabor=0,haulLabor=0; currentQuote.trees.forEach(t=>{const c=treeCalc(t);base+=c.base;haul+=c.haulHours;treeLabor+=c.treeLabor;haulLabor+=c.haulLabor}); const subtotal=treeLabor+haulLabor; return{base,haul,treeLabor,haulLabor,subtotal,total:Math.max(subtotal,state.settings.minCharge),treeCount:totalTreeCount()}}
   function selectedServices(){const set=new Set(); currentQuote.trees.forEach(t=>services.forEach(s=>{if(t.services&&t.services[s])set.add(s)})); return [...set];}
@@ -310,7 +315,7 @@
           ${hazardOn?`<label>Number of hazard limbs</label><input type="number" min="1" step="1" value="${hazardCount(t)}" oninput="updateTree('${t.id}','hazardCount',this.value)">`:''}
           ${removalOn?`<label>Difficult landing or tight drop zone?</label><select onchange="updateTree('${t.id}','removalRisky',this.value)"><option ${t.removalRisky!=='Yes'?'selected':''}>No</option><option ${t.removalRisky==='Yes'?'selected':''}>Yes</option></select><p class="small">Yes bills the removal hours at the risky rate. Trimming and haul are not affected.</p>`:''}
           <div class="divider"></div>
-          <div class="tree-actions"><p class="small" style="flex:1">Internal: qty ${c.qty} • tree hrs ${c.base.toFixed(2)} • haul hrs ${c.haulHours.toFixed(2)} ${c.riskyHrs>0?` • ${c.riskyHrs.toFixed(2)}h at risky rate (+${money(c.riskyUplift)})`:' • all standard rate'}</p><button class="btn bad" onclick="removeTree('${t.id}')">Remove Tree</button></div>
+          <div class="tree-actions"><p class="small" style="flex:1">Internal: qty ${c.qty} • ${esc(t.type||'')} ${c.sp.toFixed(2)}x • tree hrs ${c.base.toFixed(2)} • haul hrs ${c.haulHours.toFixed(2)} ${c.riskyHrs>0?` • ${c.riskyHrs.toFixed(2)}h at risky rate (+${money(c.riskyUplift)})`:' • all standard rate'}</p><button class="btn bad" onclick="removeTree('${t.id}')">Remove Tree</button></div>
         </div>`;
       list.appendChild(div);
     });
@@ -328,7 +333,7 @@
       }
       box.appendChild(d);
     });}
-  function renderTreeTypes(){$('treeTypesList').innerHTML=state.treeTypes.map(t=>`<div class="check"><span style="flex:1">${esc(t)}</span><button class="btn bad" onclick="deleteTreeType('${attr(t)}')">Delete</button></div>`).join('')}
+  function renderTreeTypes(){$('treeTypesList').innerHTML=state.treeTypes.map(t=>`<div class="check"><span style="flex:1">${esc(t)}</span><input type="number" step="0.05" min="0.05" style="width:80px" value="${state.settings.species?.[t]??1}" onchange="updateSpecies('${attr(t)}',this.value)"><button class="btn bad" onclick="deleteTreeType('${attr(t)}')">Delete</button></div>`).join('')}
   function renderSummary(){const c=allCalc(); $('quoteName').value=currentQuote.name||''; $('quoteStatus').value=currentQuote.status||'Draft'; $('grandTotal').textContent=money(c.total); $('treeCount').textContent=c.treeCount+' trees'; $('hoursTotal').textContent=c.base.toFixed(2)+' tree hrs'; $('haulHoursTotal').textContent=c.haul.toFixed(2)+' haul hrs'; $('treeLabor').textContent=money(c.treeLabor); $('haulLabor').textContent=money(c.haulLabor); $('minChargeText').textContent=money(state.settings.minCharge); $('customerQuoteText').value=makeCustomerQuote(); $('internalSummaryText').value=makeInternalSummary();}
   function renderAll(){if($('companyId'))$('companyId').value=state.companyId||''; if($('loginCompanyId'))$('loginCompanyId').value=state.companyId||''; renderCustomers(); renderCustomerDetails(); renderTrees(); renderSettings(); renderTreeTypes(); renderSummary();}
   function esc(s){return String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
