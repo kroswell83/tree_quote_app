@@ -36,7 +36,7 @@
 <header>
   <div class="topbar">
     <div><h1>Tree Quote App</h1></div>
-    <div class="actions"><button class="btn" onclick="saveNow()">Sync/Save</button></div>
+    <div class="actions"><button class="btn" onclick="saveNow()">Sync Now</button></div>
   </div>
 </header>
 <div class="wrap">
@@ -203,6 +203,7 @@
     (state.customers||[]).forEach(c=>(c.quotes||[]).forEach(q=>(q.trees||[]).forEach(migrateTree)));
   }
   function scheduleSave(){syncDraft(); saveLocal(); if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,1200)}
+  let retryTimer=null, retryDelay=0;
   function unionTypes(a,b){const out=[];[...(a||[]),...(b||[])].forEach(t=>{if(t&&!out.includes(t))out.push(t)});
     if(out.includes('Other')){out.splice(out.indexOf('Other'),1); out.push('Other');}
     return out.length?out:clone(defaultTreeTypes);}
@@ -225,13 +226,20 @@
         tx.set(ref,{state:merged,updatedAt:serverTimestamp(),updatedBy:user.email},{merge:true});
       });
       if(merged){state.customers=merged.customers; state.treeTypes=merged.treeTypes; saveLocal();}
+      if(retryTimer){clearTimeout(retryTimer); retryTimer=null;} retryDelay=0;
       $('syncStatus').textContent='Synced to company '+state.companyId+'.';
       $('syncStatus').className='status online';
     }catch(e){
-      $('syncStatus').textContent='Sync failed: '+e.message;
+      // keep trying on its own, backing off to a minute
+      retryDelay=retryDelay?Math.min(retryDelay*2,60000):15000;
+      if(retryTimer)clearTimeout(retryTimer);
+      retryTimer=setTimeout(()=>{retryTimer=null; saveNow();},retryDelay);
+      $('syncStatus').textContent='Not synced yet - retrying in '+Math.round(retryDelay/1000)+'s. ('+e.message+')';
       $('syncStatus').className='status offline';
     }
   }
+  // signal came back: try immediately rather than waiting out the backoff
+  window.addEventListener('online',()=>{if(retryDelay>0){if(retryTimer){clearTimeout(retryTimer); retryTimer=null;} saveNow();}});
   // live updates from anyone else signed into the same company
   let cloudUnsub=null, pendingRender=false;
   function isTyping(){const el=document.activeElement; return !!(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'));}
@@ -321,8 +329,14 @@
     const primary=await fetchCompanyState(canonical);
     // once the variants have been folded in we never scan again
     if(primary&&primary.state.settings&&primary.state.settings.mergedV1){
-      state=deepMerge(state,primary.state); state.companyId=canonical;
+      // hold local work aside: deepMerge would otherwise replace the whole array
+      const localCustomers=clone(state.customers||[]), localTypes=clone(state.treeTypes||[]);
+      state=deepMerge(state,primary.state);
+      state.customers=mergeCustomerLists([primary.state.customers,localCustomers]);
+      state.treeTypes=unionTypes(localTypes,primary.state.treeTypes);
+      state.companyId=canonical;
       ensureSettings(); migrateAll(); saveLocal(); renderAll();
+      await saveNow();   // push anything that never made it up last session
       $('syncStatus').textContent='Loaded shared company data: '+canonical;
       $('syncStatus').className='status online'; return;
     }
