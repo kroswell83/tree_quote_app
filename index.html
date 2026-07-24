@@ -87,7 +87,7 @@
       <div class="divider"></div>
       <h3>Customer-facing quote</h3>
       <p class="small">No hourly rates or man-hour breakdowns are shown here.</p>
-      <div class="actions"><button class="btn good" onclick="saveQuoteToCustomer()">Save Quote</button><button class="btn" onclick="copyCustomerQuote()">Copy Customer Quote</button><button class="btn" onclick="printCustomerQuote()">Print</button><button class="btn bad" onclick="resetQuote()">Clear Quote</button></div>
+      <div class="actions"><button class="btn good" onclick="saveQuoteToCustomer()">Save Quote</button><button class="btn" onclick="copyCustomerQuote()">Copy Customer Quote</button><button class="btn" onclick="printCustomerQuote()">Print</button><button class="btn bad hidden" id="discardChangesBtn" onclick="discardCurrentChanges()">Discard Changes</button><button class="btn bad" onclick="resetQuote()">Clear Quote</button></div>
       <textarea id="customerQuoteText" rows="14" style="margin-top:10px" readonly></textarea>
       <div class="divider"></div>
       <h3>Internal summary</h3>
@@ -373,10 +373,25 @@
   // so every customer keeps their own and starting another never overwrites one
   function syncDraft(){
     if(!currentQuote||!currentQuote.customerId)return;
-    if(activeQuoteId===currentQuote.id)return;           // already a saved quote
     const c=state.customers.find(x=>x.id===currentQuote.customerId&&!x.deleted);
     if(!c)return;
     c.quotes=c.quotes||[];
+    if(activeQuoteId===currentQuote.id){
+      // a saved quote being edited: keep its record in step so the work can't be lost
+      const j=c.quotes.findIndex(q=>q.id===currentQuote.id);
+      if(j>=0){
+        const st=c.quotes[j];
+        const changed=JSON.stringify(st.trees||[])!==JSON.stringify(currentQuote.trees||[])
+          ||st.name!==currentQuote.name||st.status!==currentQuote.status;
+        if(changed){
+          const r=clone(currentQuote); r.edited=true; r.total=allCalc().total; r.updatedAt=new Date().toISOString();
+          // snapshot the pre-edit version once, so changes can be rolled back
+          r.baseline=st.baseline||{trees:clone(st.trees||[]),name:st.name,status:st.status,total:st.total};
+          c.quotes[j]=r; c.updatedAt=r.updatedAt;
+        }
+      }
+      return;
+    }
     const i=c.quotes.findIndex(q=>q.id===currentQuote.id);
     if(!(currentQuote.trees||[]).length){                // empty drafts aren't worth keeping
       if(i>=0&&c.quotes[i].draft)c.quotes.splice(i,1);
@@ -389,13 +404,27 @@
   }
   window.resumeQuote=function(customerId,quoteId){
     const c=state.customers.find(x=>x.id===customerId); if(!c)return;
+    // already the open quote: just go back to it, edits and all
+    if(currentQuote&&currentQuote.id===quoteId){activeCustomerId=customerId; saveLocal(); renderAll(); showTab('quote'); return;}
     const q=(c.quotes||[]).find(x=>x.id===quoteId); if(!q)return;
     syncDraft();                                          // park whatever is open first
     activeCustomerId=customerId;
-    currentQuote=clone(q); delete currentQuote.draft; currentQuote.customerId=customerId;
+    currentQuote=clone(q); delete currentQuote.draft; delete currentQuote.edited; delete currentQuote.baseline; currentQuote.customerId=customerId;
     activeQuoteId=q.draft?null:q.id;
     saveLocal(); renderAll(); showTab('quote');
   }
+  window.discardChanges=function(customerId,quoteId){
+    const c=state.customers.find(x=>x.id===customerId); if(!c)return;
+    const i=(c.quotes||[]).findIndex(q=>q.id===quoteId); if(i<0)return;
+    const q=c.quotes[i], b=q.baseline;
+    if(!b)return alert('Nothing to discard - this quote has no unsaved changes.');
+    if(!confirm('Discard changes and go back to the last saved version?'))return;
+    q.trees=clone(b.trees||[]); q.name=b.name; q.status=b.status; q.total=b.total;
+    delete q.edited; delete q.baseline; q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt;
+    if(currentQuote&&currentQuote.id===quoteId){currentQuote=clone(q); currentQuote.customerId=c.id; activeQuoteId=q.id;}
+    scheduleSave(); renderAll();
+  }
+  window.discardCurrentChanges=function(){if(currentQuote)discardChanges(currentQuote.customerId,currentQuote.id);}
   window.discardDraft=function(customerId,quoteId){
     if(!confirm('Discard this unsaved draft?'))return;
     const c=state.customers.find(x=>x.id===customerId); if(!c)return;
@@ -427,10 +456,10 @@
     $('customerQuotes').innerHTML=qs.map(q=>{
       const open=currentQuote&&currentQuote.id===q.id;
       const head=q.draft?'Draft - not saved yet':esc(q.name||'Quote');
-      const sub=q.draft?esc(q.name||'New Quote'):esc(q.status||'Draft');
+      const sub=q.draft?esc(q.name||'New Quote'):esc(q.status||'Draft')+(q.edited?' \u2022 unsaved changes':'');
       const acts=q.draft
         ?`<button class="btn primary" onclick="resumeQuote('${c.id}','${q.id}')">Resume Draft</button><button class="btn bad" onclick="discardDraft('${c.id}','${q.id}')">Discard</button>`
-        :`<button class="btn${open?' primary':''}" onclick="resumeQuote('${c.id}','${q.id}')">${open?'Open':'View/Edit'}</button><button class="btn" onclick="duplicateQuote('${q.id}')">Duplicate</button><button class="btn bad" onclick="deleteQuote('${q.id}')">Delete</button>`;
+        :`<button class="btn${open?' primary':''}" onclick="resumeQuote('${c.id}','${q.id}')">${open?'Open':'View/Edit'}</button>${q.edited?`<button class="btn bad" onclick="discardChanges('${c.id}','${q.id}')">Discard Changes</button>`:''}<button class="btn" onclick="duplicateQuote('${q.id}')">Duplicate</button><button class="btn bad" onclick="deleteQuote('${q.id}')">Delete</button>`;
       return `<div class="listitem ${q.draft||open?'active':''}"><b>${head}</b><p>${sub} \u2022 ${money(q.total||0)} \u2022 ${cnt(q.trees)} tree(s)</p><div class="actions">${acts}</div></div>`;
     }).join('')||'<p>No saved quotes for this customer yet.</p>';}
 
@@ -549,7 +578,8 @@
       box.appendChild(d);
     });}
   function renderTreeTypes(){$('treeTypesList').innerHTML=state.treeTypes.map(t=>`<div class="check"><span style="flex:1">${esc(t)}</span><input type="number" step="0.05" min="0.05" style="width:80px" value="${state.settings.species?.[t]??1}" onchange="updateSpecies('${attr(t)}',this.value)"><button class="btn bad" onclick="deleteTreeType('${attr(t)}')">Delete</button></div>`).join('')}
-  function renderSummary(){const c=allCalc(); $('quoteName').value=currentQuote.name||''; $('quoteStatus').value=currentQuote.status||'Draft'; $('grandTotal').textContent=money(c.total); $('treeCount').textContent=c.treeCount+' trees'; $('hoursTotal').textContent=c.base.toFixed(2)+' tree hrs'; $('haulHoursTotal').textContent=c.haul.toFixed(2)+' haul hrs'; $('treeLabor').textContent=money(c.treeLabor); $('haulLabor').textContent=money(c.haulLabor); $('minChargeText').textContent=money(state.settings.minCharge); $('customerQuoteText').value=makeCustomerQuote(); $('internalSummaryText').value=makeInternalSummary();}
+  function renderSummary(){const c=allCalc();
+    if($('discardChangesBtn')){const cu=state.customers.find(x=>x.id===(currentQuote||{}).customerId); const rec=cu&&(cu.quotes||[]).find(q=>q.id===currentQuote.id); $('discardChangesBtn').classList.toggle('hidden',!(rec&&rec.edited&&rec.baseline));} $('quoteName').value=currentQuote.name||''; $('quoteStatus').value=currentQuote.status||'Draft'; $('grandTotal').textContent=money(c.total); $('treeCount').textContent=c.treeCount+' trees'; $('hoursTotal').textContent=c.base.toFixed(2)+' tree hrs'; $('haulHoursTotal').textContent=c.haul.toFixed(2)+' haul hrs'; $('treeLabor').textContent=money(c.treeLabor); $('haulLabor').textContent=money(c.haulLabor); $('minChargeText').textContent=money(state.settings.minCharge); $('customerQuoteText').value=makeCustomerQuote(); $('internalSummaryText').value=makeInternalSummary();}
   function renderAll(){if($('companyId'))$('companyId').value=state.companyId||''; if($('loginCompanyId'))$('loginCompanyId').value=state.companyId||''; renderCustomers(); renderCustomerDetails(); renderQuoteCustomer(); renderTrees(); renderSettings(); renderTreeTypes(); renderSummary();}
   function esc(s){return String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
   function attr(s){return String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;')}
