@@ -43,7 +43,7 @@
   <div id="syncStatus" class="status offline">Sign in to sync shared company data.</div>
   <div class="tabs">
     <button class="tab active" onclick="showTab('customers')" id="tab-customers">Customers</button>
-    <button class="tab" onclick="showTab('quote')" id="tab-quote">Quote</button>
+    <button class="tab hidden" onclick="showTab('quote')" id="tab-quote">Quote</button>
     <button class="tab" onclick="showTab('settings')" id="tab-settings">Settings</button>
     <button class="tab" onclick="showTab('trees')" id="tab-trees">Tree List</button>
     <button class="tab" onclick="showTab('sync')" id="tab-sync">Sync</button>
@@ -202,7 +202,7 @@
     (currentQuote.trees||[]).forEach(migrateTree);
     (state.customers||[]).forEach(c=>(c.quotes||[]).forEach(q=>(q.trees||[]).forEach(migrateTree)));
   }
-  function scheduleSave(){saveLocal(); if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,1200)}
+  function scheduleSave(){syncDraft(); saveLocal(); if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,1200)}
   function unionTypes(a,b){const out=[];[...(a||[]),...(b||[])].forEach(t=>{if(t&&!out.includes(t))out.push(t)});
     if(out.includes('Other')){out.splice(out.indexOf('Other'),1); out.push('Other');}
     return out.length?out:clone(defaultTreeTypes);}
@@ -358,7 +358,6 @@
   function liveCustomers(){return state.customers.filter(c=>!c.deleted)}
   function liveQuotes(c){return ((c&&c.quotes)||[]).filter(q=>!q.deleted)}
   window.newCustomer=function(keepQuote){const c={id:uid(),name:'',address:'',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; state.customers.unshift(c); activeCustomerId=c.id; if(!keepQuote){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; } activeQuoteId=null; scheduleSave(); renderAll();}
-  window.selectCustomerFromQuote=function(id){activeCustomerId=id||null; activeQuoteId=null; saveLocal(); renderAll();}
   window.updateActiveCustomer=function(field,value){const c=activeCustomer(); if(!c)return; c[field]=value; c.updatedAt=new Date().toISOString(); scheduleSave(); renderCustomers(); renderCustomerDetails(); renderSummary();}
   window.selectCustomer=function(id){activeCustomerId=id; saveLocal(); renderAll();};
   window.deleteActiveCustomer=function(){const c=activeCustomer(); if(!c)return alert('No customer selected.'); if(confirm('Delete this customer and all saved quotes?')){c.deleted=true; c.updatedAt=new Date().toISOString(); activeCustomerId=null; activeQuoteId=null; scheduleSave(); renderAll();}}
@@ -370,29 +369,70 @@
     alert('Customer saved.');
   }
   window.newQuote=function(){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; activeQuoteId=null; renderAll(); showTab('quote'); scheduleSave();}
+  // an in-progress quote is written into its customer's own list, flagged as a draft,
+  // so every customer keeps their own and starting another never overwrites one
+  function syncDraft(){
+    if(!currentQuote||!currentQuote.customerId)return;
+    if(activeQuoteId===currentQuote.id)return;           // already a saved quote
+    const c=state.customers.find(x=>x.id===currentQuote.customerId&&!x.deleted);
+    if(!c)return;
+    c.quotes=c.quotes||[];
+    const i=c.quotes.findIndex(q=>q.id===currentQuote.id);
+    if(!(currentQuote.trees||[]).length){                // empty drafts aren't worth keeping
+      if(i>=0&&c.quotes[i].draft)c.quotes.splice(i,1);
+      return;
+    }
+    const rec=clone(currentQuote);
+    rec.draft=true; rec.total=allCalc().total; rec.updatedAt=new Date().toISOString();
+    if(i>=0)c.quotes[i]=rec; else c.quotes.unshift(rec);
+    c.updatedAt=rec.updatedAt;
+  }
+  window.resumeQuote=function(customerId,quoteId){
+    const c=state.customers.find(x=>x.id===customerId); if(!c)return;
+    const q=(c.quotes||[]).find(x=>x.id===quoteId); if(!q)return;
+    syncDraft();                                          // park whatever is open first
+    activeCustomerId=customerId;
+    currentQuote=clone(q); delete currentQuote.draft; currentQuote.customerId=customerId;
+    activeQuoteId=q.draft?null:q.id;
+    saveLocal(); renderAll(); showTab('quote');
+  }
+  window.discardDraft=function(customerId,quoteId){
+    if(!confirm('Discard this unsaved draft?'))return;
+    const c=state.customers.find(x=>x.id===customerId); if(!c)return;
+    c.quotes=(c.quotes||[]).filter(q=>q.id!==quoteId);
+    c.updatedAt=new Date().toISOString();
+    if(currentQuote.id===quoteId){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; activeQuoteId=null;}
+    scheduleSave(); renderAll();
+  }
   window.newQuoteForCustomer=function(){
     const c=activeCustomer();
     if(!c){alert('Select or create a customer first.'); return;}
-    currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+    syncDraft();
+    currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],customerId:c.id,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     activeQuoteId=null; scheduleSave(); renderAll(); showTab('quote');
   }
-  window.saveQuoteToCustomer=function(){let c=activeCustomer(); if(!c){alert('Create or select a customer first.'); showTab('customers'); return;} currentQuote.name=$('quoteName')?.value||currentQuote.name||'New Quote'; currentQuote.status=$('quoteStatus')?.value||currentQuote.status||'Draft'; currentQuote.total=allCalc().total; currentQuote.updatedAt=new Date().toISOString(); const existing=c.quotes.findIndex(q=>q.id===currentQuote.id); if(existing>=0)c.quotes[existing]=clone(currentQuote); else c.quotes.unshift(clone(currentQuote)); activeQuoteId=currentQuote.id; c.updatedAt=new Date().toISOString(); scheduleSave(); renderAll(); alert('Quote saved to customer.');}
-  window.loadQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); activeQuoteId=qid; renderAll(); showTab('quote');}
-  window.duplicateQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); currentQuote.id=uid(); currentQuote.name=(currentQuote.name||'Quote')+' Copy'; currentQuote.status='Draft'; currentQuote.createdAt=new Date().toISOString(); activeQuoteId=null; renderAll(); showTab('quote');}
+  window.saveQuoteToCustomer=function(){let c=activeCustomer(); if(!c){alert('Create or select a customer first.'); showTab('customers'); return;} currentQuote.name=$('quoteName')?.value||currentQuote.name||'New Quote'; currentQuote.status=$('quoteStatus')?.value||currentQuote.status||'Draft'; currentQuote.total=allCalc().total; currentQuote.customerId=c.id; currentQuote.updatedAt=new Date().toISOString(); const existing=c.quotes.findIndex(q=>q.id===currentQuote.id); if(existing>=0)c.quotes[existing]=clone(currentQuote); else c.quotes.unshift(clone(currentQuote)); activeQuoteId=currentQuote.id; c.updatedAt=new Date().toISOString(); scheduleSave(); renderAll(); alert('Quote saved to customer.');}
+  window.duplicateQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); currentQuote.id=uid(); currentQuote.customerId=c.id; currentQuote.name=(currentQuote.name||'Quote')+' Copy'; currentQuote.status='Draft'; currentQuote.createdAt=new Date().toISOString(); activeQuoteId=null; renderAll(); showTab('quote');}
   window.deleteQuote=function(qid){const c=activeCustomer(); if(!c)return; if(confirm('Delete this saved quote?')){const q=c.quotes.find(x=>x.id===qid); if(q){q.deleted=true; q.updatedAt=new Date().toISOString();} c.updatedAt=new Date().toISOString(); if(activeQuoteId===qid){activeQuoteId=null; newQuote();} scheduleSave(); renderAll();}}
   function renderQuoteCustomer(){
     const box=$('quoteCustomerBox'); if(!box)return;
-    const c=activeCustomer(), list=liveCustomers();
-    const opts=['<option value="">-- No customer selected --</option>']
-      .concat(list.map(x=>`<option value="${esc(x.id)}" ${c&&x.id===c.id?'selected':''}>${esc(x.name||'Unnamed Customer')}</option>`)).join('');
-    box.innerHTML=`<label>Customer</label><select onchange="selectCustomerFromQuote(this.value)">${opts}</select>`
-      +(c?`<input placeholder="Customer name" value="${esc(c.name||'')}" oninput="updateActiveCustomer('name',this.value)" style="margin-top:6px">`
-          +`<input placeholder="Property address" value="${esc(c.address||'')}" oninput="updateActiveCustomer('address',this.value)" style="margin-top:6px">`
-        :`<div class="warn" style="margin-top:8px;font-size:12px">No customer selected. This quote cannot be saved, and the customer lines will be blank on the printed quote.</div>`)
-      +`<button class="btn" style="margin-top:8px" onclick="newCustomer(true)">+ New Customer</button>`;
+    const c=activeCustomer();
+    box.innerHTML=c
+      ?`<label>Quote for</label><div class="listitem" style="margin:0"><b>${esc(c.name||'Unnamed Customer')}</b><p style="margin:2px 0 0">${esc(c.address||'No address')}</p>${c.phone?`<p class="small" style="margin:2px 0 0">${esc(c.phone)}</p>`:''}</div>`
+      :`<div class="warn" style="font-size:12px">No customer attached. Start a quote from a customer to fix this.</div>`;
   }
   function renderCustomers(){const q=($('customerSearch')?.value||'').toLowerCase(); const list=$('customersList'); list.innerHTML=''; const matches=liveCustomers().filter(c=>[c.name,c.address,c.phone,c.email].join(' ').toLowerCase().includes(q)); if(matches.length===0){list.innerHTML='<p>No customers yet.</p>'; return;} matches.forEach(c=>{const div=document.createElement('div'); div.className='listitem '+(c.id===activeCustomerId?'active':''); div.innerHTML=`<b>${esc(c.name)||'Unnamed Customer'}</b><p>${esc(c.address)||'No address'}</p><p class="small">${liveQuotes(c).length} saved quote(s)</p><button class="btn" onclick="selectCustomer('${c.id}')">Open</button>`; list.appendChild(div);});}
-  function renderCustomerDetails(){const c=activeCustomer(); if($('newQuoteBtn'))$('newQuoteBtn').classList.toggle('hidden',!c); ['custName','custAddress','custPhone','custEmail','custNotes'].forEach(id=>$(id).value=''); $('customerQuotes').innerHTML='<p>Select or create a customer.</p>'; if(!c)return; $('custName').value=c.name||''; $('custAddress').value=c.address||''; $('custPhone').value=c.phone||''; $('custEmail').value=c.email||''; $('custNotes').value=c.notes||''; const qs=liveQuotes(c); $('customerQuotes').innerHTML=qs.length?qs.map(q=>`<div class="listitem ${q.id===activeQuoteId?'active':''}"><b>${esc(q.name||'Quote')}</b><p>${esc(q.status||'Draft')} • ${money(q.total||0)} • ${(q.trees||[]).reduce((sum,t)=>sum+(Math.floor(Number(t.qty||1))>0?Math.floor(Number(t.qty||1)):1),0)} tree(s)</p><div class="actions"><button class="btn" onclick="loadQuote('${q.id}')">View/Edit</button><button class="btn" onclick="duplicateQuote('${q.id}')">Duplicate</button><button class="btn bad" onclick="deleteQuote('${q.id}')">Delete</button></div></div>`).join(''):'<p>No saved quotes for this customer yet.</p>';}
+  function renderCustomerDetails(){const c=activeCustomer(); if($('newQuoteBtn'))$('newQuoteBtn').classList.toggle('hidden',!c); ['custName','custAddress','custPhone','custEmail','custNotes'].forEach(id=>$(id).value=''); $('customerQuotes').innerHTML='<p>Select or create a customer.</p>'; if(!c)return; $('custName').value=c.name||''; $('custAddress').value=c.address||''; $('custPhone').value=c.phone||''; $('custEmail').value=c.email||''; $('custNotes').value=c.notes||''; const qs=liveQuotes(c);
+    const cnt=list=>(list||[]).reduce((sum,t)=>sum+(Math.floor(Number(t.qty||1))>0?Math.floor(Number(t.qty||1)):1),0);
+    $('customerQuotes').innerHTML=qs.map(q=>{
+      const open=currentQuote&&currentQuote.id===q.id;
+      const head=q.draft?'Draft - not saved yet':esc(q.name||'Quote');
+      const sub=q.draft?esc(q.name||'New Quote'):esc(q.status||'Draft');
+      const acts=q.draft
+        ?`<button class="btn primary" onclick="resumeQuote('${c.id}','${q.id}')">Resume Draft</button><button class="btn bad" onclick="discardDraft('${c.id}','${q.id}')">Discard</button>`
+        :`<button class="btn${open?' primary':''}" onclick="resumeQuote('${c.id}','${q.id}')">${open?'Open':'View/Edit'}</button><button class="btn" onclick="duplicateQuote('${q.id}')">Duplicate</button><button class="btn bad" onclick="deleteQuote('${q.id}')">Delete</button>`;
+      return `<div class="listitem ${q.draft||open?'active':''}"><b>${head}</b><p>${sub} \u2022 ${money(q.total||0)} \u2022 ${cnt(q.trees)} tree(s)</p><div class="actions">${acts}</div></div>`;
+    }).join('')||'<p>No saved quotes for this customer yet.</p>';}
 
   window.addTree=function(){currentQuote.trees.push({id:uid(),type:state.treeTypes[0],qty:1,height:'',dbh:'',canopy:'',size:'Auto',haul:'Yes',hazardCount:1,removalRisky:'No',services:{}}); scheduleSave(); renderAll();}
   window.removeTree=id=>{currentQuote.trees=currentQuote.trees.filter(t=>t.id!==id); scheduleSave(); renderAll();}
@@ -513,7 +553,7 @@
   function renderAll(){if($('companyId'))$('companyId').value=state.companyId||''; if($('loginCompanyId'))$('loginCompanyId').value=state.companyId||''; renderCustomers(); renderCustomerDetails(); renderQuoteCustomer(); renderTrees(); renderSettings(); renderTreeTypes(); renderSummary();}
   function esc(s){return String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
   function attr(s){return String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;')}
-  loadLocal(); ensureSettings(); migrateAll(); if(state.customers.length===0){state.customers.push({id:'samplecustomer',name:'Sample Customer',address:'123 Live Oak Dr, Georgetown, TX',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}); activeCustomerId='samplecustomer'} if(currentQuote.trees.length===0)currentQuote.trees.push({id:'sampletree',type:'Live Oak',qty:1,height:35,dbh:18,canopy:35,size:'Auto',haul:'Yes',hazardCount:1,removalRisky:'No',trimScope:'Standard',services:{[TRIM]:true}}); setupFirebase(); renderAll();
+  loadLocal(); ensureSettings(); migrateAll(); if(state.customers.length===0){state.customers.push({id:'samplecustomer',name:'Sample Customer',address:'123 Live Oak Dr, Georgetown, TX',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}); activeCustomerId='samplecustomer'} if(currentQuote.trees.length===0){currentQuote.customerId=activeCustomerId; currentQuote.trees.push({id:'sampletree',type:'Live Oak',qty:1,height:35,dbh:18,canopy:35,size:'Auto',haul:'Yes',hazardCount:1,removalRisky:'No',trimScope:'Standard',services:{[TRIM]:true}});} setupFirebase(); renderAll();
 </script>
 </body>
 </html>
