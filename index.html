@@ -173,8 +173,8 @@
   function uid(){return (crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random())).replaceAll('-','').slice(0,18)}
   function clone(x){return JSON.parse(JSON.stringify(x))}
   function deepMerge(target,src){for(const k in src){if(src[k]&&typeof src[k]==='object'&&!Array.isArray(src[k])){target[k]=deepMerge(target[k]||{},src[k])}else target[k]=src[k]}return target}
-  function saveLocal(){localStorage.setItem('treeQuoteSharedState',JSON.stringify(state));localStorage.setItem('treeQuoteCurrentQuote',JSON.stringify(currentQuote));localStorage.setItem('treeQuoteActiveCustomerId',activeCustomerId||'');}
-  function loadLocal(){try{const s=JSON.parse(localStorage.getItem('treeQuoteSharedState')||'null'); if(s) state=deepMerge(state,s); const q=JSON.parse(localStorage.getItem('treeQuoteCurrentQuote')||'null'); if(q) currentQuote=q; activeCustomerId=localStorage.getItem('treeQuoteActiveCustomerId')||null;}catch(e){}}
+  function saveLocal(){localStorage.setItem('treeQuoteSharedState',JSON.stringify(state));localStorage.setItem('treeQuoteCurrentQuote',JSON.stringify(currentQuote));localStorage.setItem('treeQuoteActiveCustomerId',activeCustomerId||'');localStorage.setItem('treeQuoteActiveQuoteId',activeQuoteId||'');}
+  function loadLocal(){try{const s=JSON.parse(localStorage.getItem('treeQuoteSharedState')||'null'); if(s) state=deepMerge(state,s); const q=JSON.parse(localStorage.getItem('treeQuoteCurrentQuote')||'null'); if(q) currentQuote=q; activeCustomerId=localStorage.getItem('treeQuoteActiveCustomerId')||null; activeQuoteId=localStorage.getItem('treeQuoteActiveQuoteId')||null;}catch(e){}}
   function ensureSettings(){
     const s=state.settings;
     if(!s.serviceHaulMult)s.serviceHaulMult={};
@@ -411,8 +411,11 @@
     const c=state.customers.find(x=>x.id===currentQuote.customerId&&!x.deleted);
     if(!c)return;
     c.quotes=c.quotes||[];
-    if(activeQuoteId===currentQuote.id){
-      // a saved quote being edited: keep its record in step so the work can't be lost
+    const existing=c.quotes.find(q=>q.id===currentQuote.id);
+    // the open quote already exists as a saved (non-draft) record: it's an edit, never a demotion,
+    // even if activeQuoteId was lost across a reload
+    if(activeQuoteId===currentQuote.id || (existing&&!existing.draft)){
+      if(existing&&!existing.draft)activeQuoteId=currentQuote.id;   // self-heal after reload
       const j=c.quotes.findIndex(q=>q.id===currentQuote.id);
       if(j>=0){
         const st=c.quotes[j];
