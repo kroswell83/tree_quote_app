@@ -623,13 +623,8 @@
     });
   }
   function rateRow(label,rate,onh,onc,ond,bold){
-    const nm=bold?`<b class="small" style="color:var(--ink)">${esc(label)}</b>`:`<span class="small" style="color:var(--ink)">${esc(label)}</span>`;
+    const nm=label?`<div style="font-weight:700;color:var(--ink);font-size:14px;margin:8px 0 2px">${esc(label)}</div>`:'';
     return `${nm}<div class="three"><div><label>min / height-ft</label><input type="number" step="0.5" min="0" value="${rate.h}" oninput="${onh}"></div><div><label>min / canopy-ft</label><input type="number" step="0.5" min="0" value="${rate.c}" oninput="${onc}"></div><div><label>min / DBH-in</label><input type="number" step="0.5" min="0" value="${rate.d}" oninput="${ond}"></div></div>`;
-  }
-  function bundleTotal(recipe){
-    const S=state.settings; const sum={h:0,c:0,d:0};
-    recipe.forEach(k=>{const r=S.components[k]||defaultComponents[k]; sum.h+=r.h; sum.c+=r.c; sum.d+=r.d;});
-    return sum;
   }
   function renderSettings(){
     ['standardRate','riskyRate','haulRatio','minCharge'].forEach(id=>{if($(id))$(id).value=state.settings[id]});
@@ -644,17 +639,14 @@
       rateRow(COMPONENT_LABELS[k],S.components[k]||defaultComponents[k],
         `updateComponent('${k}','h',this.value)`,`updateComponent('${k}','c',this.value)`,`updateComponent('${k}','d',this.value)`,false)
     ).join('<div style="height:6px"></div>');
-    const std=bundleTotal(TRIM_RECIPES['Standard']), hvy=bundleTotal(TRIM_RECIPES['Heavy']);
-    const totLine=(lbl,t)=>`<div class="mathline"><b>${lbl}</b> = ${t.h} / ${t.c} / ${t.d} min per (height-ft / canopy-ft / DBH-in)</div>`;
-    trimCard.innerHTML=`<b>Tree Trimming</b><p class="small">Winner-takes-all: each service charges whichever measurement (height, canopy, or DBH) implies the most time. Standard and Heavy are built from the components below and re-total automatically.</p>
-      <b class="small" style="color:var(--ink)">Pruning components</b><p class="small">Deadwood only and Sprouts &amp; suckers only sell these singly. Standard and Heavy add them together.</p>
+    trimCard.innerHTML=`<b>Tree Trimming</b><p class="small">Set the minutes each service takes per foot of height, foot of canopy, and inch of trunk. The tree is priced off whichever of its measurements comes out highest.</p>
+      <b class="small" style="color:var(--ink)">Pruning components</b><p class="small">Deadwood only and Sprouts &amp; suckers only sell these singly. Standard and Heavy combine them.</p>
       ${compRows}
       <div class="divider"></div>
-      ${totLine('Standard (deadwood + canopy raise + suckers)',std)}
-      ${totLine('Heavy (standard + thinning &amp; reduction)',hvy)}
+      <p class="small">Standard and Heavy are calculated automatically from the component numbers above, so there is nothing to set here. Standard = deadwood + canopy raise + suckers. Heavy = Standard + thinning &amp; reduction.</p>
       <div class="divider"></div>
       ${rateRow('Lot pass (quick pass, heavily treed lots)',S.lotPass||defaultLotPass,`updateLotPass('h',this.value)`,`updateLotPass('c',this.value)`,`updateLotPass('d',this.value)`,true)}
-      <label>Haul \\u00d7 (multiplies the base haul ratio)</label><input type="number" step="0.25" value="${haulMult(TRIM)}" oninput="updateServiceHaulMult('${attr(TRIM)}',this.value)">`;
+      <label>Haul × (multiplies the base haul ratio)</label><input type="number" step="0.25" value="${haulMult(TRIM)}" oninput="updateServiceHaulMult('${attr(TRIM)}',this.value)">`;
     box.appendChild(trimCard);
 
     // --- the other services ---
@@ -662,7 +654,7 @@
       const d=document.createElement('div'); d.className='card';
       const r=S.serviceRates[s]||defaultServiceRates[s];
       const note=s===HAZARD?'<p class="small">Rate is per limb. The tree card asks how many.</p>':'';
-      d.innerHTML=`<b>${esc(s)}</b>${note}${rateRow('Rate',r,`updateServiceRate('${attr(s)}','h',this.value)`,`updateServiceRate('${attr(s)}','c',this.value)`,`updateServiceRate('${attr(s)}','d',this.value)`,false)}<label>Haul \\u00d7 (multiplies the base haul ratio)</label><input type="number" step="0.25" value="${haulMult(s)}" oninput="updateServiceHaulMult('${attr(s)}',this.value)">`;
+      d.innerHTML=`<b>${esc(s)}</b>${note}${rateRow('Rate',r,`updateServiceRate('${attr(s)}','h',this.value)`,`updateServiceRate('${attr(s)}','c',this.value)`,`updateServiceRate('${attr(s)}','d',this.value)`,false)}<label>Haul × (multiplies the base haul ratio)</label><input type="number" step="0.25" value="${haulMult(s)}" oninput="updateServiceHaulMult('${attr(s)}',this.value)">`;
       box.appendChild(d);
     });
   }
