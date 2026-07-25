@@ -91,7 +91,7 @@
       <div class="divider"></div>
       <h3>Customer-facing quote</h3>
       <p class="small">No hourly rates or man-hour breakdowns are shown here.</p>
-      <div class="actions"><button class="btn good" onclick="saveQuoteToCustomer()">Save Quote</button><button class="btn" onclick="copyCustomerQuote()">Copy Customer Quote</button><button class="btn" onclick="printCustomerQuote()">Print</button><button class="btn bad hidden" id="discardChangesBtn" onclick="discardCurrentChanges()">Discard Changes</button><button class="btn bad" onclick="resetQuote()">Clear Quote</button></div>
+      <div class="actions"><button class="btn good" onclick="saveQuoteToCustomer()">Save Quote</button><button class="btn primary" onclick="emailQuote()">Email to Customer</button><button class="btn" onclick="copyCustomerQuote()">Copy Customer Quote</button><button class="btn" onclick="printCustomerQuote()">Print</button><button class="btn bad hidden" id="discardChangesBtn" onclick="discardCurrentChanges()">Discard Changes</button><button class="btn bad" onclick="resetQuote()">Clear Quote</button></div>
       <textarea id="customerQuoteText" rows="14" style="margin-top:10px" readonly></textarea>
       <div class="divider"></div>
       <h3>Internal summary</h3>
@@ -530,7 +530,7 @@
     currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],customerId:c.id,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     activeQuoteId=null; scheduleSave(); renderAll(); showTab('quote');
   }
-  window.saveQuoteToCustomer=function(){let c=activeCustomer(); if(!c){alert('Create or select a customer first.'); showTab('customers'); return;} currentQuote.name=$('quoteName')?.value||currentQuote.name||'New Quote'; currentQuote.status=$('quoteStatus')?.value||currentQuote.status||'Draft'; currentQuote.total=allCalc().total; currentQuote.customerId=c.id; currentQuote.updatedAt=new Date().toISOString(); const existing=c.quotes.findIndex(q=>q.id===currentQuote.id); if(existing>=0)c.quotes[existing]=clone(currentQuote); else c.quotes.unshift(clone(currentQuote)); activeQuoteId=currentQuote.id; c.updatedAt=new Date().toISOString(); scheduleSave(); renderAll(); alert('Quote saved to customer.');}
+  window.saveQuoteToCustomer=function(silent){let c=activeCustomer(); if(!c){alert('Create or select a customer first.'); showTab('customers'); return;} currentQuote.name=$('quoteName')?.value||currentQuote.name||'New Quote'; currentQuote.status=$('quoteStatus')?.value||currentQuote.status||'Draft'; currentQuote.total=allCalc().total; currentQuote.customerId=c.id; currentQuote.updatedAt=new Date().toISOString(); const existing=c.quotes.findIndex(q=>q.id===currentQuote.id); if(existing>=0)c.quotes[existing]=clone(currentQuote); else c.quotes.unshift(clone(currentQuote)); activeQuoteId=currentQuote.id; c.updatedAt=new Date().toISOString(); scheduleSave(); renderAll(); if(silent!==true)alert('Quote saved to customer.');}
   window.duplicateQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); currentQuote.id=uid(); currentQuote.customerId=c.id; currentQuote.name=(currentQuote.name||'Quote')+' Copy'; currentQuote.status='Draft'; currentQuote.createdAt=new Date().toISOString(); activeQuoteId=null; renderAll(); showTab('quote');}
   window.deleteQuote=function(qid){const c=activeCustomer(); if(!c)return; if(confirm('Delete this saved quote?')){const q=c.quotes.find(x=>x.id===qid); if(q){q.deleted=true; q.updatedAt=new Date().toISOString();} c.updatedAt=new Date().toISOString(); if(activeQuoteId===qid){activeQuoteId=null; newQuote();} scheduleSave(); renderAll();}}
   function renderQuoteCustomer(){
@@ -628,7 +628,44 @@
   function selectedServices(){const set=new Set(); currentQuote.trees.forEach(t=>services.forEach(s=>{if(t.services&&t.services[s])set.add(s)})); return [...set];}
   function makeCustomerQuote(){const c=activeCustomer(); const calc=allCalc(); const svc=selectedServices(); let lines=[]; lines.push('TREE SERVICE QUOTE'); lines.push(''); if(c){lines.push('Customer: '+(c.name||'')); lines.push('Property: '+(c.address||'')); if(c.phone)lines.push('Phone: '+c.phone); if(c.email)lines.push('Email: '+c.email); lines.push('');} lines.push('Quote: '+(currentQuote.name||'Tree Service Quote')); lines.push('Status: '+(currentQuote.status||'Draft')); lines.push(''); lines.push('Services Included:'); if(svc.length)svc.forEach(s=>lines.push('- '+s)); else lines.push('- No services selected'); lines.push(''); lines.push('Tree count: '+totalTreeCount()); lines.push('Debris haul away: '+(currentQuote.trees.some(t=>t.haul==='Yes')?'Included where selected':'Not included')); lines.push(''); lines.push('Quote Price: '+money(calc.total)); const notes=String(state.settings.quoteNotes||'').trim(); if(notes){lines.push(''); lines.push('Notes:'); notes.split(/\r?\n/).filter(Boolean).forEach(n=>lines.push('- '+n.replace(/^[-•]\s*/,'')));} return lines.join('\n');}
   function makeInternalSummary(){const calc=allCalc(); let lines=['INTERNAL QUOTE SUMMARY','Total: '+money(calc.total),'Tree labor: '+money(calc.treeLabor),'Haul away labor: '+money(calc.haulLabor),'Tree count: '+calc.treeCount,'Tree hours: '+calc.base.toFixed(2),'Haul away hours: '+calc.haul.toFixed(2),'']; currentQuote.trees.forEach((t,i)=>{const tc=treeCalc(t); const sv=services.filter(s=>t.services&&t.services[s]).map(s=>s===TRIM?`${s} (${trimScopeOf(t)})`:s).join(', ')||'No services selected'; lines.push(`Tree ${i+1}: ${t.type} | Qty: ${tc.qty} | ${Number(t.height)||0}ft/${Number(t.canopy)||0}ft/${Number(t.dbh)||0}in | Haul: ${t.haul} | Hours: ${tc.base.toFixed(2)} | Haul hrs: ${tc.haulHours.toFixed(2)} | Total: ${money(tc.total)}${tc.riskyHrs>0?` | ${tc.riskyHrs.toFixed(2)}h risky (+${money(tc.riskyUplift)})`:''} | ${sv}`)}); return lines.join('\n');}
-  window.copyCustomerQuote=async()=>{await navigator.clipboard.writeText(makeCustomerQuote()).catch(()=>{}); alert('Customer quote copied.');}
+  window.emailQuote=async function(){
+    const c=activeCustomer();
+    if(!c)return alert('Select a customer for this quote first.');
+    const to=(c.email||'').trim();
+    if(!to)return alert('This customer has no email address. Add one on their customer page first.');
+    if(!(currentQuote.trees||[]).length)return alert('Add at least one tree before sending.');
+    if(!confirm('Email this quote to '+to+'?'))return;
+
+    const subject='Tree Service Quote'+(c.name?' for '+c.name:'');
+    const text=makeCustomerQuote();
+    const replyTo=(state.settings.replyToEmail||'').trim()||undefined;
+
+    // find the button so we can show progress
+    const btns=[...document.querySelectorAll('#quote .actions button')];
+    const btn=btns.find(b=>/Email to Customer|Sending|Sent/i.test(b.textContent));
+    const setBtn=(t,disabled)=>{if(btn){btn.textContent=t; btn.disabled=!!disabled;}};
+    setBtn('Sending...',true);
+
+    try{
+      const res=await fetch('/api/send-quote',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({to,subject,text,replyTo})
+      });
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok){throw new Error(data.error||('Send failed ('+res.status+')'));}
+      // success: mark the quote Sent and save
+      currentQuote.status='Sent';
+      if($('quoteStatus'))$('quoteStatus').value='Sent';
+      saveQuoteToCustomer(true);
+      setBtn('Sent \u2713',true);
+      setTimeout(()=>setBtn('Email to Customer',false),2500);
+      alert('Quote emailed to '+to+' and marked Sent.');
+    }catch(e){
+      setBtn('Email to Customer',false);
+      alert('Could not send: '+e.message);
+    }
+  }
   window.printCustomerQuote=function(){const w=window.open('','_blank'); w.document.write('<pre style="font-family:Arial;white-space:pre-wrap;font-size:14px">'+esc(makeCustomerQuote())+'</pre>'); w.document.close(); w.print();}
   window.resetQuote=function(){if(confirm('Clear current quote?')){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; activeQuoteId=null; scheduleSave(); renderAll();}}
   function renderTrees(){
