@@ -49,23 +49,28 @@
     <button class="tab" onclick="showTab('sync')" id="tab-sync">Sync</button>
   </div>
 
-  <section id="customers" class="grid two">
-    <div class="card">
-      <h2>Customers</h2>
-      <input id="customerSearch" placeholder="Search name, address, phone..." oninput="renderCustomers()" />
-      <div class="actions" style="margin-top:10px"><button class="btn primary" onclick="newCustomer()">+ New Customer</button></div>
-      <div id="customersList" style="margin-top:10px"></div>
+  <section id="customers">
+    <div id="customerListView">
+      <div class="card">
+        <h2>Customers</h2>
+        <input id="customerSearch" placeholder="Search name, address, phone..." oninput="renderCustomers()" />
+        <div class="actions" style="margin-top:10px"><button class="btn primary" onclick="newCustomer()">+ New Customer</button></div>
+        <div id="customersList" style="margin-top:10px"></div>
+      </div>
     </div>
-    <div class="card">
-      <h2>Customer Details</h2>
-      <label>Name</label><input id="custName" oninput="updateActiveCustomer('name',this.value)" />
-      <label>Property address</label><input id="custAddress" oninput="updateActiveCustomer('address',this.value)" />
-      <div class="row"><div><label>Phone</label><input id="custPhone" oninput="updateActiveCustomer('phone',this.value)" /></div><div><label>Email</label><input id="custEmail" oninput="updateActiveCustomer('email',this.value)" /></div></div>
-      <label>Notes</label><textarea id="custNotes" rows="3" oninput="updateActiveCustomer('notes',this.value)"></textarea>
-      <div class="actions" style="margin-top:10px"><button class="btn good" onclick="saveCustomerOnly()">Save Customer</button><button class="btn bad" onclick="deleteActiveCustomer()">Delete Customer</button></div>
-      <div class="divider"></div>
-      <div class="topbar"><h3 style="margin:0">Saved Quotes</h3><button class="btn primary hidden" id="newQuoteBtn" onclick="newQuoteForCustomer()">+ New Quote</button></div>
-      <div id="customerQuotes"></div>
+    <div id="customerDetailView" class="hidden">
+      <div class="card">
+        <div class="topbar" style="margin-bottom:8px"><button class="btn" onclick="backToCustomers()">← Back to Customers</button><button class="btn bad" onclick="deleteActiveCustomer()">Delete Customer</button></div>
+        <h2 id="custDetailName">Customer</h2>
+        <label>Name</label><input id="custName" oninput="updateActiveCustomer('name',this.value)" />
+        <label>Property address</label><input id="custAddress" oninput="updateActiveCustomer('address',this.value)" />
+        <div class="row"><div><label>Phone</label><input id="custPhone" oninput="updateActiveCustomer('phone',this.value)" /></div><div><label>Email</label><input id="custEmail" oninput="updateActiveCustomer('email',this.value)" /></div></div>
+        <label>Notes</label><textarea id="custNotes" rows="3" oninput="updateActiveCustomer('notes',this.value)"></textarea>
+        <div class="actions" style="margin-top:10px"><button class="btn good" onclick="saveCustomerOnly()">Save Customer</button></div>
+        <div class="divider"></div>
+        <div class="topbar"><h3 style="margin:0">Saved Quotes</h3><button class="btn primary" id="newQuoteBtn" onclick="newQuoteForCustomer()">+ New Quote</button></div>
+        <div id="customerQuotes"></div>
+      </div>
     </div>
   </section>
 
@@ -387,15 +392,17 @@
   window.signUp=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const companyId=syncLoginCompanyId(); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!companyId)return setAuthMessage('Enter the Company ID first.','danger'); if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Creating account...'); try{await createUserWithEmailAndPassword(auth,email,password); setAuthMessage('Account created. Loading shared company data...');}catch(e){setAuthMessage(e.message,'danger');}}
   window.signOutNow=async()=>{if(cloudUnsub){cloudUnsub(); cloudUnsub=null;} if(firebaseReady) await signOut(auth); accessGranted=false; showApp(false); setAuthMessage('Signed out.');}
   window.setCompanyId=v=>{state.companyId=normalizeCompanyId(v); if($('loginCompanyId'))$('loginCompanyId').value=state.companyId; scheduleSave(); if(user&&state.companyId){accessGranted=true; showApp(true); loadCloud().then(watchCloud);}}
-  window.showTab=tab=>{['customers','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);});}
+  window.showTab=tab=>{['customers','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);}); if(tab==='customers'&&$('customerListView')){showCustomerDetail(false); renderCustomers();}}
 
   function activeCustomer(){const c=state.customers.find(x=>x.id===activeCustomerId); return (c&&!c.deleted)?c:null}
   function liveCustomers(){return state.customers.filter(c=>!c.deleted)}
   function liveQuotes(c){return ((c&&c.quotes)||[]).filter(q=>!q.deleted)}
-  window.newCustomer=function(keepQuote){const c={id:uid(),name:'',address:'',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; state.customers.unshift(c); activeCustomerId=c.id; if(!keepQuote){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; } activeQuoteId=null; scheduleSave(); renderAll();}
+  window.newCustomer=function(keepQuote){const c={id:uid(),name:'',address:'',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; state.customers.unshift(c); activeCustomerId=c.id; if(!keepQuote){currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}; } activeQuoteId=null; scheduleSave(); if(!keepQuote)showCustomerDetail(true); renderAll();}
   window.updateActiveCustomer=function(field,value){const c=activeCustomer(); if(!c)return; c[field]=value; c.updatedAt=new Date().toISOString(); scheduleSave(); renderCustomers(); renderCustomerDetails(); renderSummary();}
-  window.selectCustomer=function(id){activeCustomerId=id; saveLocal(); renderAll();};
-  window.deleteActiveCustomer=function(){const c=activeCustomer(); if(!c)return alert('No customer selected.'); if(confirm('Delete this customer and all saved quotes?')){c.deleted=true; c.updatedAt=new Date().toISOString(); activeCustomerId=null; activeQuoteId=null; scheduleSave(); renderAll();}}
+  function showCustomerDetail(on){$('customerListView').classList.toggle('hidden',!!on); $('customerDetailView').classList.toggle('hidden',!on);}
+  window.backToCustomers=function(){showCustomerDetail(false); renderCustomers();}
+  window.selectCustomer=function(id){activeCustomerId=id; activeQuoteId=null; saveLocal(); showCustomerDetail(true); renderAll();};
+  window.deleteActiveCustomer=function(){const c=activeCustomer(); if(!c)return alert('No customer selected.'); if(confirm('Delete this customer and all saved quotes?')){c.deleted=true; c.updatedAt=new Date().toISOString(); activeCustomerId=null; activeQuoteId=null; scheduleSave(); showCustomerDetail(false); renderAll();}}
   window.saveCustomerOnly=async function(){
     const c=activeCustomer();
     if(!c){alert('Select or create a customer first.'); return;}
@@ -485,11 +492,12 @@
     const box=$('quoteCustomerBox'); if(!box)return;
     const c=activeCustomer();
     box.innerHTML=c
-      ?`<label>Quote for</label><div class="listitem" style="margin:0"><b>${esc(c.name||'Unnamed Customer')}</b><p style="margin:2px 0 0">${esc(c.address||'No address')}</p>${c.phone?`<p class="small" style="margin:2px 0 0">${esc(c.phone)}</p>`:''}</div>`
+      ?`<div class="topbar"><label style="margin:0">Quote for</label><button class="btn" style="padding:4px 9px;font-size:12px" onclick="openCustomerFromQuote()">Edit customer</button></div><div class="listitem" style="margin:6px 0 0"><b>${esc(c.name||'Unnamed Customer')}</b><p style="margin:2px 0 0">${esc(c.address||'No address')}</p>${c.phone?`<p class="small" style="margin:2px 0 0">${esc(c.phone)}</p>`:''}</div>`
       :`<div class="warn" style="font-size:12px">No customer attached. Start a quote from a customer to fix this.</div>`;
   }
+  window.openCustomerFromQuote=function(){const c=activeCustomer(); if(!c)return; showTab('customers'); showCustomerDetail(true); renderCustomerDetails();}
   function renderCustomers(){const q=($('customerSearch')?.value||'').toLowerCase(); const list=$('customersList'); list.innerHTML=''; const matches=liveCustomers().filter(c=>[c.name,c.address,c.phone,c.email].join(' ').toLowerCase().includes(q)); if(matches.length===0){list.innerHTML='<p>No customers yet.</p>'; return;} matches.forEach(c=>{const div=document.createElement('div'); div.className='listitem '+(c.id===activeCustomerId?'active':''); div.innerHTML=`<b>${esc(c.name)||'Unnamed Customer'}</b><p>${esc(c.address)||'No address'}</p><p class="small">${liveQuotes(c).length} saved quote(s)</p><button class="btn" onclick="selectCustomer('${c.id}')">Open</button>`; list.appendChild(div);});}
-  function renderCustomerDetails(){const c=activeCustomer(); if($('newQuoteBtn'))$('newQuoteBtn').classList.toggle('hidden',!c); ['custName','custAddress','custPhone','custEmail','custNotes'].forEach(id=>$(id).value=''); $('customerQuotes').innerHTML='<p>Select or create a customer.</p>'; if(!c)return; $('custName').value=c.name||''; $('custAddress').value=c.address||''; $('custPhone').value=c.phone||''; $('custEmail').value=c.email||''; $('custNotes').value=c.notes||''; const qs=liveQuotes(c);
+  function renderCustomerDetails(){const c=activeCustomer(); ['custName','custAddress','custPhone','custEmail','custNotes'].forEach(id=>$(id).value=''); if($('custDetailName'))$('custDetailName').textContent=(c&&(c.name||'Unnamed Customer'))||'Customer'; $('customerQuotes').innerHTML=''; if(!c)return; $('custName').value=c.name||''; $('custAddress').value=c.address||''; $('custPhone').value=c.phone||''; $('custEmail').value=c.email||''; $('custNotes').value=c.notes||''; const qs=liveQuotes(c);
     const cnt=list=>(list||[]).reduce((sum,t)=>sum+(Math.floor(Number(t.qty||1))>0?Math.floor(Number(t.qty||1)):1),0);
     $('customerQuotes').innerHTML=qs.map(q=>{
       const open=currentQuote&&currentQuote.id===q.id;
