@@ -16,11 +16,9 @@
   <div class="card auth-card">
     <div class="auth-logo">
       <h1>Tree Quote App</h1>
-      <p>Sign in or create an account with your Company ID to access customers and quotes.</p>
+      <p>Sign in or create an account to access customers and quotes.</p>
     </div>
     <div id="authFirebaseBox" class="warn">Checking Firebase configuration...</div>
-    <label>Company ID</label>
-    <input id="loginCompanyId" placeholder="example: my-tree-company" autocomplete="organization" />
     <label>Email</label>
     <input id="loginEmail" type="email" placeholder="you@example.com" autocomplete="email" />
     <label>Password</label>
@@ -29,7 +27,8 @@
       <button class="btn primary" onclick="signIn()">Sign In</button>
       <button class="btn" onclick="signUp()">Create Account</button>
     </div>
-    <div id="authMessage" class="auth-msg small">You need the correct Company ID to open shared company data.</div>
+    <div style="margin-top:10px"><a href="#" onclick="resetPassword();return false;" style="font-size:13px;color:var(--accent);text-decoration:none">Forgot password?</a></div>
+    <div id="authMessage" class="auth-msg small">Only authorized accounts can open company data.</div>
   </div>
 </section>
 <div id="appShell" class="hidden">
@@ -113,8 +112,8 @@
   </section>
 
   <section id="sync" class="hidden grid two">
-    <div class="card"><h2>Firebase Sync</h2><div id="firebaseBox" class="warn">Firebase is not configured yet. Paste your config into firebase-config.js.</div><label>Company ID</label><input id="companyId" placeholder="my-tree-company" oninput="setCompanyId(this.value)" /><p class="small">Anyone signed in with this same Company ID will share customers, quotes, settings, and tree list.</p><div class="actions" style="margin-top:10px"><button class="btn" onclick="signOutNow()">Sign Out</button></div><p class="small" id="userInfo">Not signed in.</p></div>
-    <div class="card"><h2>Access</h2><p>The Company ID is the shared access key. Give it only to people who should see and edit company data.</p><p class="small">Someone with only the Vercel link can create an account, but they still need the Company ID to open shared company data.</p></div>
+    <div class="card"><h2>Account</h2><div id="firebaseBox" class="warn">Firebase is not configured yet. Paste your config into firebase-config.js.</div><p class="small" id="userInfo">Not signed in.</p><div class="actions" style="margin-top:10px"><button class="btn" onclick="signOutNow()">Sign Out</button></div></div>
+    <div class="card"><h2>Team Access</h2><p class="small">Only these emails can open the app. Add a teammate's exact sign-in email, then have them sign in. Removing an email locks that person out.</p><div id="teamAccessList" style="margin-top:8px"></div><div class="row" style="margin-top:8px"><input id="newTeamEmail" type="email" placeholder="teammate@example.com" /><button class="btn primary" onclick="addTeamEmail()">Add</button></div><p class="small" id="teamAccessMsg"></p></div>
   </section>
   <div class="footer-space"></div>
 </div>
@@ -122,11 +121,19 @@
 <script src="firebase-config.js"></script>
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js';
-  import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
+  import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
   import { getFirestore, doc, getDoc, setDoc, onSnapshot, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js';
 
   const TRIM='Tree Trimming', HAZARD='Hazard Limb Removal', STORM='Storm Cleanup', REMOVAL='Tree Removal';
   const services=[TRIM,HAZARD,STORM,REMOVAL,'Mistletoe Removal'];
+  // permanent owner: always allowed, cannot be removed from the access list
+  const OWNER_EMAIL='crosby_keith@ymail.com';
+  // one company, fixed internally. access is controlled by the email allow-list, not this id.
+  const FIXED_COMPANY_ID='tree-company';
+  const normEmail=e=>String(e||'').trim().toLowerCase();
+  function allowedEmails(){const list=(state.settings&&state.settings.allowedEmails)||[]; return [OWNER_EMAIL,...list].map(normEmail);}
+  function isAllowed(email){return allowedEmails().includes(normEmail(email));}
+  function isOwner(email){return normEmail(email)===normEmail(OWNER_EMAIL);}
   const TRIM_SCOPES=['Lot pass','Deadwood only','Sprouts and suckers only','Standard','Heavy'];
   // scopes that contain no billable-as-risky deadwood work, so the toggle skips them
   const TRIM_NO_DEADWOOD=['Lot pass','Sprouts and suckers only'];
@@ -169,8 +176,8 @@
   // which scopes carry no risky-billable deadwood
   const defaultHaulMult={}; services.forEach(s=>defaultHaulMult[s]=1); defaultHaulMult[REMOVAL]=2;
   const defaultSpecies={}; defaultTreeTypes.forEach(t=>defaultSpecies[t]=1);
-  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',components:structuredClone(defaultComponents),lotPass:structuredClone(defaultLotPass),serviceRates:structuredClone(defaultServiceRates),serviceHaulMult:defaultHaulMult,deadwoodRisky:false,hazardRisky:true,stormRisky:false,species:defaultSpecies};
-  let state={settings:structuredClone(defaultSettings),treeTypes:[...defaultTreeTypes],customers:[],companyId:''};
+  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',components:structuredClone(defaultComponents),lotPass:structuredClone(defaultLotPass),serviceRates:structuredClone(defaultServiceRates),serviceHaulMult:defaultHaulMult,deadwoodRisky:false,hazardRisky:true,stormRisky:false,species:defaultSpecies,allowedEmails:[]};
+  let state={settings:structuredClone(defaultSettings),treeTypes:[...defaultTreeTypes],customers:[],companyId:'tree-company'};
   let currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   let activeCustomerId=null, activeQuoteId=null;
   let auth=null,db=null,user=null,firebaseReady=false,accessGranted=false,saveTimer=null;
@@ -179,7 +186,7 @@
   function clone(x){return JSON.parse(JSON.stringify(x))}
   function deepMerge(target,src){for(const k in src){if(src[k]&&typeof src[k]==='object'&&!Array.isArray(src[k])){target[k]=deepMerge(target[k]||{},src[k])}else target[k]=src[k]}return target}
   function saveLocal(){localStorage.setItem('treeQuoteSharedState',JSON.stringify(state));localStorage.setItem('treeQuoteCurrentQuote',JSON.stringify(currentQuote));localStorage.setItem('treeQuoteActiveCustomerId',activeCustomerId||'');localStorage.setItem('treeQuoteActiveQuoteId',activeQuoteId||'');}
-  function loadLocal(){try{const s=JSON.parse(localStorage.getItem('treeQuoteSharedState')||'null'); if(s) state=deepMerge(state,s); const q=JSON.parse(localStorage.getItem('treeQuoteCurrentQuote')||'null'); if(q) currentQuote=q; activeCustomerId=localStorage.getItem('treeQuoteActiveCustomerId')||null; activeQuoteId=localStorage.getItem('treeQuoteActiveQuoteId')||null;}catch(e){}}
+  function loadLocal(){try{const s=JSON.parse(localStorage.getItem('treeQuoteSharedState')||'null'); if(s) state=deepMerge(state,s); const q=JSON.parse(localStorage.getItem('treeQuoteCurrentQuote')||'null'); if(q) currentQuote=q; activeCustomerId=localStorage.getItem('treeQuoteActiveCustomerId')||null; activeQuoteId=localStorage.getItem('treeQuoteActiveQuoteId')||null;}catch(e){} state.companyId=FIXED_COMPANY_ID;}
   function ensureSettings(){
     const s=state.settings;
     if(!s.serviceHaulMult)s.serviceHaulMult={};
@@ -194,6 +201,7 @@
     if(s.deadwoodRisky===undefined)s.deadwoodRisky=false;
     if(s.hazardRisky===undefined)s.hazardRisky=true;
     if(s.stormRisky===undefined)s.stormRisky=false;
+    if(!Array.isArray(s.allowedEmails))s.allowedEmails=[];
     if(!s.species)s.species={};
     (state.treeTypes||[]).forEach(t=>{if(s.species[t]===undefined)s.species[t]=1});
     if(!s.speciesResetV1){Object.keys(s.species).forEach(k=>s.species[k]=1); s.speciesResetV1=true;}
@@ -349,7 +357,7 @@
     return{settings,treeTypes:treeTypes.length?treeTypes:clone(defaultTreeTypes),customers,companyId:localState.companyId};
   }
   async function loadCloud(){
-    if(!firebaseReady||!user||!accessGranted||!state.companyId)return;
+    if(!firebaseReady||!user||!state.companyId)return;
     const canonical=normalizeCompanyId(state.companyId);
     state.companyId=canonical;
     const primary=await fetchCompanyState(canonical);
@@ -385,13 +393,50 @@
   }
   function setAuthMessage(msg,kind='small'){const box=$('authMessage'); if(!box)return; box.textContent=msg; box.className='auth-msg '+kind;}
   function showApp(allowed){$('authGate').classList.toggle('hidden',!!allowed); $('appShell').classList.toggle('hidden',!allowed);}
-  function syncLoginCompanyId(){const v=normalizeCompanyId($('loginCompanyId')?.value||''); if(v){state.companyId=v; saveLocal();} else if(state.companyId){state.companyId=normalizeCompanyId(state.companyId);} return state.companyId;}
-  async function openForSignedInUser(u){if(!u){accessGranted=false; showApp(false); if($('userInfo'))$('userInfo').textContent='Not signed in.'; return;} const companyId=syncLoginCompanyId(); if(!companyId){accessGranted=false; showApp(false); setAuthMessage('Enter the Company ID to open the app.','danger'); return;} accessGranted=true; showApp(true); $('userInfo').textContent='Signed in as '+u.email+' • Company ID: '+companyId; setAuthMessage('Signed in. Loading shared company data...'); await loadCloud(); watchCloud(); renderAll();}
-  function setupFirebase(){try{if(!window.firebaseConfig){$('firebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';$('authFirebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';setAuthMessage('Firebase must be configured before anyone can sign in.','danger');return}const app=initializeApp(window.firebaseConfig);auth=getAuth(app);db=getFirestore(app);firebaseReady=true;$('firebaseBox').className='ok';$('firebaseBox').textContent='Firebase configured. Signed-in users with the same Company ID can sync shared company data.';$('authFirebaseBox').className='ok';$('authFirebaseBox').textContent='Firebase configured.';onAuthStateChanged(auth,async u=>{user=u; await openForSignedInUser(u);});}catch(e){$('firebaseBox').className='danger';$('firebaseBox').textContent='Firebase error: '+e.message;$('authFirebaseBox').className='danger';$('authFirebaseBox').textContent='Firebase error: '+e.message;}}
-  window.signIn=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const companyId=syncLoginCompanyId(); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!companyId)return setAuthMessage('Enter the Company ID first.','danger'); if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Signing in...'); await signInWithEmailAndPassword(auth,email,password).catch(e=>setAuthMessage(e.message,'danger'));}
-  window.signUp=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const companyId=syncLoginCompanyId(); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!companyId)return setAuthMessage('Enter the Company ID first.','danger'); if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Creating account...'); try{await createUserWithEmailAndPassword(auth,email,password); setAuthMessage('Account created. Loading shared company data...');}catch(e){setAuthMessage(e.message,'danger');}}
+  function syncLoginCompanyId(){state.companyId=FIXED_COMPANY_ID; saveLocal(); return state.companyId;}
+  async function openForSignedInUser(u){
+    if(!u){accessGranted=false; showApp(false); if($('userInfo'))$('userInfo').textContent='Not signed in.'; return;}
+    syncLoginCompanyId();
+    // load first so the shared allow-list is current, then decide access
+    await loadCloud();
+    if(!isAllowed(u.email)){
+      accessGranted=false; showApp(false);
+      setAuthMessage('This account ('+u.email+') is not authorized yet. Ask the owner to add your email under Sync → Team Access, then sign in again.','danger');
+      if(cloudUnsub){cloudUnsub(); cloudUnsub=null;}
+      return;
+    }
+    accessGranted=true; showApp(true);
+    $('userInfo').textContent='Signed in as '+u.email+(isOwner(u.email)?' (owner)':'');
+    setAuthMessage('Signed in.');
+    watchCloud(); renderAll();
+  }
+  function setupFirebase(){try{if(!window.firebaseConfig){$('firebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';$('authFirebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';setAuthMessage('Firebase must be configured before anyone can sign in.','danger');return}const app=initializeApp(window.firebaseConfig);auth=getAuth(app);db=getFirestore(app);firebaseReady=true;$('firebaseBox').className='ok';$('firebaseBox').textContent='Firebase configured.';$('authFirebaseBox').className='ok';$('authFirebaseBox').textContent='Firebase configured.';onAuthStateChanged(auth,async u=>{user=u; await openForSignedInUser(u);});}catch(e){$('firebaseBox').className='danger';$('firebaseBox').textContent='Firebase error: '+e.message;$('authFirebaseBox').className='danger';$('authFirebaseBox').textContent='Firebase error: '+e.message;}}
+  window.signIn=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Signing in...'); await signInWithEmailAndPassword(auth,email,password).catch(e=>setAuthMessage(e.message,'danger'));}
+  window.signUp=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Creating account...'); try{await createUserWithEmailAndPassword(auth,email,password);}catch(e){setAuthMessage(e.message,'danger');}}
+  window.resetPassword=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const email=($('loginEmail').value||'').trim(); if(!email)return setAuthMessage('Type your email above first, then tap Forgot password.','danger'); try{await sendPasswordResetEmail(auth,email); setAuthMessage('Password reset email sent to '+email+'. Check your inbox (and spam).');}catch(e){setAuthMessage(e.message,'danger');}}
   window.signOutNow=async()=>{if(cloudUnsub){cloudUnsub(); cloudUnsub=null;} if(firebaseReady) await signOut(auth); accessGranted=false; showApp(false); setAuthMessage('Signed out.');}
-  window.setCompanyId=v=>{state.companyId=normalizeCompanyId(v); if($('loginCompanyId'))$('loginCompanyId').value=state.companyId; scheduleSave(); if(user&&state.companyId){accessGranted=true; showApp(true); loadCloud().then(watchCloud);}}
+  window.addTeamEmail=function(){
+    const el=$('newTeamEmail'), email=normEmail(el.value);
+    if(!email||email.indexOf('@')<0)return $('teamAccessMsg').textContent='Enter a valid email.';
+    if(isOwner(email))return $('teamAccessMsg').textContent='That is the owner email; it always has access.';
+    state.settings.allowedEmails=state.settings.allowedEmails||[];
+    if(state.settings.allowedEmails.map(normEmail).includes(email))return $('teamAccessMsg').textContent='That email is already on the list.';
+    state.settings.allowedEmails.push(email); el.value=''; $('teamAccessMsg').textContent='Added '+email+'. Have them sign in.';
+    scheduleSave(); renderTeamAccess();
+  }
+  window.removeTeamEmail=function(email){
+    if(!confirm('Remove '+email+'? They will lose access next time the app checks.'))return;
+    state.settings.allowedEmails=(state.settings.allowedEmails||[]).filter(e=>normEmail(e)!==normEmail(email));
+    scheduleSave(); renderTeamAccess();
+  }
+  function renderTeamAccess(){
+    const box=$('teamAccessList'); if(!box)return;
+    const rows=[`<div class="listitem" style="display:flex;align-items:center;gap:8px"><b style="flex:1">${esc(OWNER_EMAIL)}</b><span class="badge">Owner</span></div>`];
+    (state.settings.allowedEmails||[]).forEach(e=>{
+      rows.push(`<div class="listitem" style="display:flex;align-items:center;gap:8px"><span style="flex:1">${esc(e)}</span><button class="btn bad" style="padding:6px 9px;font-size:12px" onclick="removeTeamEmail('${attr(e)}')">Remove</button></div>`);
+    });
+    box.innerHTML=rows.join('');
+  }
   window.showTab=tab=>{['customers','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);}); if(tab==='customers'&&$('customerListView')){showCustomerDetail(false); renderCustomers();}}
 
   function activeCustomer(){const c=state.customers.find(x=>x.id===activeCustomerId); return (c&&!c.deleted)?c:null}
@@ -669,7 +714,7 @@
   function renderTreeTypes(){$('treeTypesList').innerHTML=state.treeTypes.map(t=>`<div class="check"><span style="flex:1">${esc(t)}</span><input type="number" step="0.05" min="0.05" style="width:80px" value="${state.settings.species?.[t]??1}" onchange="updateSpecies('${attr(t)}',this.value)"><button class="btn bad" onclick="deleteTreeType('${attr(t)}')">Delete</button></div>`).join('')}
   function renderSummary(){const c=allCalc();
     if($('discardChangesBtn')){const cu=state.customers.find(x=>x.id===(currentQuote||{}).customerId); const rec=cu&&(cu.quotes||[]).find(q=>q.id===currentQuote.id); $('discardChangesBtn').classList.toggle('hidden',!(rec&&rec.edited&&rec.baseline));} $('quoteName').value=currentQuote.name||''; $('quoteStatus').value=currentQuote.status||'Draft'; $('grandTotal').textContent=money(c.total); $('treeCount').textContent=c.treeCount+' trees'; $('hoursTotal').textContent=c.base.toFixed(2)+' tree hrs'; $('haulHoursTotal').textContent=c.haul.toFixed(2)+' haul hrs'; $('treeLabor').textContent=money(c.treeLabor); $('haulLabor').textContent=money(c.haulLabor); $('minChargeText').textContent=money(state.settings.minCharge); $('customerQuoteText').value=makeCustomerQuote(); $('internalSummaryText').value=makeInternalSummary();}
-  function renderAll(){if($('companyId'))$('companyId').value=state.companyId||''; if($('loginCompanyId'))$('loginCompanyId').value=state.companyId||''; renderCustomers(); renderCustomerDetails(); renderQuoteCustomer(); renderTrees(); renderSettings(); renderTreeTypes(); renderSummary();}
+  function renderAll(){renderCustomers(); renderCustomerDetails(); renderQuoteCustomer(); renderTrees(); renderSettings(); renderTreeTypes(); renderSummary(); renderTeamAccess();}
   function esc(s){return String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
   function attr(s){return String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;')}
   loadLocal(); ensureSettings(); migrateAll(); if(state.customers.length===0){state.customers.push({id:'samplecustomer',name:'Sample Customer',address:'123 Live Oak Dr, Georgetown, TX',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}); activeCustomerId='samplecustomer'} if(currentQuote.trees.length===0){currentQuote.customerId=activeCustomerId; currentQuote.trees.push({id:'sampletree',type:'Live Oak',qty:1,height:35,dbh:18,canopy:35,haul:'Yes',hazardCount:1,removalRisky:'No',trimScope:'Standard',services:{[TRIM]:true}});} setupFirebase(); renderAll();
