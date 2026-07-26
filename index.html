@@ -42,6 +42,7 @@
   <div id="syncStatus" class="status offline">Sign in to sync shared company data.</div>
   <div class="tabs">
     <button class="tab active" onclick="showTab('customers')" id="tab-customers">Customers</button>
+    <button class="tab" onclick="showTab('followup')" id="tab-followup">Follow Up</button>
     <button class="tab hidden" onclick="showTab('quote')" id="tab-quote">Quote</button>
     <button class="tab" onclick="showTab('settings')" id="tab-settings">Settings</button>
     <button class="tab" onclick="showTab('trees')" id="tab-trees">Tree List</button>
@@ -70,6 +71,14 @@
         <div class="topbar"><h3 style="margin:0">Saved Quotes</h3><button class="btn primary" id="newQuoteBtn" onclick="newQuoteForCustomer()">+ New Quote</button></div>
         <div id="customerQuotes"></div>
       </div>
+    </div>
+  </section>
+
+  <section id="followup" class="hidden">
+    <div class="card">
+      <h2>Follow Up</h2>
+      <p class="small">Every quote that's been sent and is still open. Oldest at the top. A quote leaves this list when the customer approves it, or when you close it out as Lost.</p>
+      <div id="followUpList" style="margin-top:10px"></div>
     </div>
   </section>
 
@@ -506,6 +515,46 @@
     const on=notifies(email);
     return `<button class="btn${on?' good':''}" style="padding:6px 9px;font-size:12px" onclick="toggleNotify('${attr(email)}')" title="Receive job-approved alerts">${on?'Alerts ON':'Alerts off'}</button>`;
   }
+  function timeAgo(iso){
+    if(!iso)return '';
+    const then=new Date(iso).getTime(); if(isNaN(then))return '';
+    const days=Math.floor((Date.now()-then)/86400000);
+    if(days<=0)return 'today';
+    if(days===1)return '1 day ago';
+    return days+' days ago';
+  }
+  function followUpItems(){
+    const items=[];
+    liveCustomers().forEach(c=>{
+      liveQuotes(c).forEach(q=>{
+        if(q.status==='Sent'||q.status==='Declined'){
+          // sort key: when it entered this waiting state (declinedAt if declined, else updatedAt)
+          const since=q.status==='Declined'?(q.declinedAt||q.updatedAt):q.updatedAt;
+          items.push({c,q,since});
+        }
+      });
+    });
+    // oldest first
+    items.sort((a,b)=>new Date(a.since||0)-new Date(b.since||0));
+    return items;
+  }
+  function renderFollowUp(){
+    const box=$('followUpList'); if(!box)return;
+    const items=followUpItems();
+    if(!items.length){box.innerHTML='<p>Nothing waiting. Sent quotes will show up here until they\u2019re approved or closed out.</p>'; return;}
+    box.innerHTML=items.map(({c,q,since})=>{
+      const declined=q.status==='Declined';
+      const tag=declined
+        ?'<span class="badge" style="background:#fef3f2;color:#b42318">Declined</span>'
+        :'<span class="badge" style="background:#fffaeb;color:#93370d">Awaiting response</span>';
+      const when=declined?('declined '+timeAgo(since)):('sent '+timeAgo(since));
+      return `<div class="listitem"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(c.name||'Unnamed Customer')}</b>${tag}</div>
+        <p style="margin:4px 0 0">${esc(c.address||'No address')}</p>
+        <p class="small" style="margin:2px 0 0">${esc(q.name&&q.name.toLowerCase()!=='new quote'?q.name+' \u2022 ':'')}${money(q.total||0)} \u2022 ${when}</p>
+        <div class="actions" style="margin-top:8px"><button class="btn" onclick="openFollowUpQuote('${c.id}','${q.id}')">Open Quote</button></div></div>`;
+    }).join('');
+  }
+  window.openFollowUpQuote=function(cid,qid){activeCustomerId=cid; resumeQuote(cid,qid);}
   function renderTeamAccess(){
     const box=$('teamAccessList'); if(!box)return;
     const rows=[`<div class="listitem" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="flex:1;min-width:140px">${esc(OWNER_EMAIL)}</b><span class="badge">Owner</span>${notifyToggleHtml(OWNER_EMAIL)}</div>`];
@@ -514,7 +563,7 @@
     });
     box.innerHTML=rows.join('')+'<p class="small" style="margin-top:6px">“Alerts ON” means this person is emailed when a customer approves a quote. At least one person must always have alerts on.</p>';
   }
-  window.showTab=tab=>{['customers','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);}); if(tab==='customers'&&$('customerListView')){showCustomerDetail(false); renderCustomers();}}
+  window.showTab=tab=>{['customers','followup','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);}); if(tab==='customers'&&$('customerListView')){showCustomerDetail(false); renderCustomers();} if(tab==='followup')renderFollowUp();}
 
   function activeCustomer(){const c=state.customers.find(x=>x.id===activeCustomerId); return (c&&!c.deleted)?c:null}
   function liveCustomers(){return state.customers.filter(c=>!c.deleted)}
@@ -845,7 +894,7 @@
   }
   function renderSummary(){const c=allCalc();
     applyQuoteLock(); $('quoteName').value=currentQuote.name||''; $('quoteStatus').value=currentQuote.status||'Draft'; $('grandTotal').textContent=money(c.total); $('treeCount').textContent=c.treeCount+' trees'; $('hoursTotal').textContent=c.base.toFixed(2)+' tree hrs'; $('haulHoursTotal').textContent=c.haul.toFixed(2)+' haul hrs'; $('treeLabor').textContent=money(c.treeLabor); $('haulLabor').textContent=money(c.haulLabor); $('minChargeText').textContent=money(state.settings.minCharge); $('customerQuoteText').value=makeCustomerQuote(); $('internalSummaryText').value=makeInternalSummary();}
-  function renderAll(){renderCustomers(); renderCustomerDetails(); renderQuoteCustomer(); renderTrees(); renderSettings(); renderTreeTypes(); renderSummary(); renderTeamAccess();}
+  function renderAll(){renderCustomers(); renderCustomerDetails(); renderQuoteCustomer(); renderTrees(); renderSettings(); renderTreeTypes(); renderSummary(); renderTeamAccess(); if(!$('followup').classList.contains('hidden'))renderFollowUp();}
   function esc(s){return String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
   function attr(s){return String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;')}
   loadLocal(); ensureSettings(); migrateAll(); if(state.customers.length===0){state.customers.push({id:'samplecustomer',name:'Sample Customer',address:'123 Live Oak Dr, Georgetown, TX',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}); activeCustomerId='samplecustomer'} if(currentQuote.trees.length===0){currentQuote.customerId=activeCustomerId; currentQuote.trees.push({id:'sampletree',type:'Live Oak',qty:1,height:35,dbh:18,canopy:35,haul:'Yes',hazardCount:1,removalRisky:'No',trimScope:'Standard',services:{[TRIM]:true}});} setupFirebase(); renderAll();
