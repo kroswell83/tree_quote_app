@@ -176,7 +176,7 @@
   // which scopes carry no risky-billable deadwood
   const defaultHaulMult={}; services.forEach(s=>defaultHaulMult[s]=1); defaultHaulMult[REMOVAL]=2;
   const defaultSpecies={}; defaultTreeTypes.forEach(t=>defaultSpecies[t]=1);
-  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',components:structuredClone(defaultComponents),lotPass:structuredClone(defaultLotPass),serviceRates:structuredClone(defaultServiceRates),serviceHaulMult:defaultHaulMult,deadwoodRisky:false,hazardRisky:true,stormRisky:false,species:defaultSpecies,allowedEmails:[]};
+  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',components:structuredClone(defaultComponents),lotPass:structuredClone(defaultLotPass),serviceRates:structuredClone(defaultServiceRates),serviceHaulMult:defaultHaulMult,deadwoodRisky:false,hazardRisky:true,stormRisky:false,species:defaultSpecies,allowedEmails:[],notifyEmails:[OWNER_EMAIL]};
   let state={settings:structuredClone(defaultSettings),treeTypes:[...defaultTreeTypes],customers:[],companyId:'tree-company'};
   let currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   let activeCustomerId=null, activeQuoteId=null;
@@ -202,6 +202,9 @@
     if(s.hazardRisky===undefined)s.hazardRisky=true;
     if(s.stormRisky===undefined)s.stormRisky=false;
     if(!Array.isArray(s.allowedEmails))s.allowedEmails=[];
+    if(!Array.isArray(s.notifyEmails))s.notifyEmails=[OWNER_EMAIL];
+    // never allow zero recipients — fall back to the owner
+    if(s.notifyEmails.length===0)s.notifyEmails=[OWNER_EMAIL];
     if(!s.species)s.species={};
     (state.treeTypes||[]).forEach(t=>{if(s.species[t]===undefined)s.species[t]=1});
     if(!s.speciesResetV1){Object.keys(s.species).forEach(k=>s.species[k]=1); s.speciesResetV1=true;}
@@ -455,18 +458,42 @@
     state.settings.allowedEmails.push(email); el.value=''; $('teamAccessMsg').textContent='Added '+email+'. Have them sign in.';
     scheduleSave(); renderTeamAccess();
   }
+  function notifies(email){return (state.settings.notifyEmails||[]).map(normEmail).includes(normEmail(email));}
+  window.toggleNotify=function(email){
+    state.settings.notifyEmails=state.settings.notifyEmails||[];
+    const on=notifies(email);
+    if(on){
+      // turning off — but never let the last one go dark
+      const remaining=state.settings.notifyEmails.filter(e=>normEmail(e)!==normEmail(email));
+      if(remaining.length===0){
+        $('teamAccessMsg').textContent='Someone has to receive job alerts. Turn on another person first, then turn this one off.';
+        renderTeamAccess(); return;
+      }
+      state.settings.notifyEmails=remaining;
+    } else {
+      state.settings.notifyEmails.push(normEmail(email));
+    }
+    $('teamAccessMsg').textContent='';
+    scheduleSave(); renderTeamAccess();
+  }
   window.removeTeamEmail=function(email){
     if(!confirm('Remove '+email+'? They will lose access next time the app checks.'))return;
     state.settings.allowedEmails=(state.settings.allowedEmails||[]).filter(e=>normEmail(e)!==normEmail(email));
+    state.settings.notifyEmails=(state.settings.notifyEmails||[]).filter(e=>normEmail(e)!==normEmail(email));
+    if((state.settings.notifyEmails||[]).length===0)state.settings.notifyEmails=[OWNER_EMAIL];
     scheduleSave(); renderTeamAccess();
+  }
+  function notifyToggleHtml(email){
+    const on=notifies(email);
+    return `<button class="btn${on?' good':''}" style="padding:6px 9px;font-size:12px" onclick="toggleNotify('${attr(email)}')" title="Receive job-approved alerts">${on?'Alerts ON':'Alerts off'}</button>`;
   }
   function renderTeamAccess(){
     const box=$('teamAccessList'); if(!box)return;
-    const rows=[`<div class="listitem" style="display:flex;align-items:center;gap:8px"><b style="flex:1">${esc(OWNER_EMAIL)}</b><span class="badge">Owner</span></div>`];
+    const rows=[`<div class="listitem" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="flex:1;min-width:140px">${esc(OWNER_EMAIL)}</b><span class="badge">Owner</span>${notifyToggleHtml(OWNER_EMAIL)}</div>`];
     (state.settings.allowedEmails||[]).forEach(e=>{
-      rows.push(`<div class="listitem" style="display:flex;align-items:center;gap:8px"><span style="flex:1">${esc(e)}</span><button class="btn bad" style="padding:6px 9px;font-size:12px" onclick="removeTeamEmail('${attr(e)}')">Remove</button></div>`);
+      rows.push(`<div class="listitem" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="flex:1;min-width:140px">${esc(e)}</span>${notifyToggleHtml(e)}<button class="btn bad" style="padding:6px 9px;font-size:12px" onclick="removeTeamEmail('${attr(e)}')">Remove</button></div>`);
     });
-    box.innerHTML=rows.join('');
+    box.innerHTML=rows.join('')+'<p class="small" style="margin-top:6px">“Alerts ON” means this person is emailed when a customer approves a quote. At least one person must always have alerts on.</p>';
   }
   window.showTab=tab=>{['customers','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);}); if(tab==='customers'&&$('customerListView')){showCustomerDetail(false); renderCustomers();}}
 
@@ -660,9 +687,9 @@
   function makeCustomerQuote(){const c=activeCustomer(); const calc=allCalc(); const svc=selectedServices(); let lines=[]; lines.push('TREE SERVICE QUOTE'); lines.push(''); if(c){lines.push('Customer: '+(c.name||'')); lines.push('Property: '+(c.address||'')); if(c.phone)lines.push('Phone: '+c.phone); if(c.email)lines.push('Email: '+c.email); lines.push('');} const qn=(currentQuote.name||'').trim(); if(qn&&qn.toLowerCase()!=='new quote'){lines.push('Quote: '+qn); lines.push('');} lines.push('Services Included:'); if(svc.length)svc.forEach(s=>lines.push('- '+s)); else lines.push('- No services selected'); lines.push(''); lines.push('Tree count: '+totalTreeCount()); lines.push('Debris haul away: '+(currentQuote.trees.some(t=>t.haul==='Yes')?'Included where selected':'Not included')); lines.push(''); lines.push('Quote Price: '+money(calc.total)); const notes=String(state.settings.quoteNotes||'').trim(); if(notes){lines.push(''); lines.push('Notes:'); notes.split(/\r?\n/).filter(Boolean).forEach(n=>lines.push('- '+n.replace(/^[-•]\s*/,'')));} return lines.join('\n');}
   function makeInternalSummary(){const calc=allCalc(); let lines=['INTERNAL QUOTE SUMMARY','Total: '+money(calc.total),'Tree labor: '+money(calc.treeLabor),'Haul away labor: '+money(calc.haulLabor),'Tree count: '+calc.treeCount,'Tree hours: '+calc.base.toFixed(2),'Haul away hours: '+calc.haul.toFixed(2),'']; currentQuote.trees.forEach((t,i)=>{const tc=treeCalc(t); const sv=services.filter(s=>t.services&&t.services[s]).map(s=>s===TRIM?`${s} (${trimScopeOf(t)})`:s).join(', ')||'No services selected'; lines.push(`Tree ${i+1}: ${t.type} | Qty: ${tc.qty} | ${Number(t.height)||0}ft/${Number(t.canopy)||0}ft/${Number(t.dbh)||0}in | Haul: ${t.haul} | Hours: ${tc.base.toFixed(2)} | Haul hrs: ${tc.haulHours.toFixed(2)} | Total: ${money(tc.total)}${tc.riskyHrs>0?` | ${tc.riskyHrs.toFixed(2)}h risky (+${money(tc.riskyUplift)})`:''} | ${sv}`)}); return lines.join('\n');}
   function makeToken(){
-    // long unguessable token: 32 chars of url-safe randomness
+    // long unguessable token: 48 hex chars. Hex only, so no +/-_ to trip URLs or regex.
     const bytes=new Uint8Array(24); crypto.getRandomValues(bytes);
-    return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    return [...bytes].map(b=>b.toString(16).padStart(2,'0')).join('');
   }
   async function writeApprovalRecord(token,c){
     if(!(firebaseReady&&db))return false;
@@ -671,6 +698,7 @@
       quoteId:currentQuote.id, customerId:c.id,
       customerName:c.name||'', property:c.address||'',
       quoteText:makeCustomerQuote(), total:allCalc().total,
+      notifyEmails:(state.settings.notifyEmails&&state.settings.notifyEmails.length?state.settings.notifyEmails:[OWNER_EMAIL]),
       status:'pending', createdAt:new Date().toISOString()
     };
     await setDoc(doc(db,'approvals',token),rec);
