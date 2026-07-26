@@ -523,36 +523,83 @@
     if(days===1)return '1 day ago';
     return days+' days ago';
   }
-  function followUpItems(){
-    const items=[];
+  const LOST_REASONS=['Price too high','Went with another company','No longer needs the work','Couldn\u2019t reach customer','Other'];
+  function followUpBuckets(){
+    const approved=[], awaiting=[], declined=[];
     liveCustomers().forEach(c=>{
       liveQuotes(c).forEach(q=>{
-        if(q.status==='Sent'||q.status==='Declined'){
-          // sort key: when it entered this waiting state (declinedAt if declined, else updatedAt)
-          const since=q.status==='Declined'?(q.declinedAt||q.updatedAt):q.updatedAt;
-          items.push({c,q,since});
-        }
+        if(q.status==='Approved'){approved.push({c,q,since:q.approvedAt||q.updatedAt});}
+        else if(q.status==='Sent'){awaiting.push({c,q,since:q.updatedAt});}
+        else if(q.status==='Declined'){declined.push({c,q,since:q.declinedAt||q.updatedAt});}
       });
     });
-    // oldest first
-    items.sort((a,b)=>new Date(a.since||0)-new Date(b.since||0));
-    return items;
+    const oldestFirst=(a,b)=>new Date(a.since||0)-new Date(b.since||0);
+    approved.sort(oldestFirst); awaiting.sort(oldestFirst); declined.sort(oldestFirst);
+    return {approved,awaiting,declined};
+  }
+  function followUpRow({c,q,since},kind){
+    const nameLine=`<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(c.name||'Unnamed Customer')}</b></div>`;
+    const detail=`<p style="margin:4px 0 0">${esc(c.address||'No address')}</p><p class="small" style="margin:2px 0 0">${esc(q.name&&q.name.toLowerCase()!=='new quote'?q.name+' \u2022 ':'')}${money(q.total||0)} \u2022 ${(kind==='declined'?'declined ':kind==='approved'?'approved ':'sent ')+timeAgo(since)}</p>`;
+    let actions;
+    if(kind==='approved'){
+      actions=`<button class="btn" onclick="openFollowUpQuote('${c.id}','${q.id}')">Open Quote</button><span class="small" style="align-self:center;color:var(--muted)">Call to set a date \u2022 scheduling coming soon</span>`;
+    } else {
+      actions=`<button class="btn good" onclick="markApprovedFromList('${c.id}','${q.id}')">Mark Approved</button><button class="btn bad" onclick="toggleLostPicker('${q.id}')">Mark Lost</button><button class="btn" onclick="openFollowUpQuote('${c.id}','${q.id}')">Open Quote</button>`;
+    }
+    const picker=`<div id="lostPicker-${q.id}" class="hidden" style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px"><p class="small" style="margin:0 0 6px"><b>Reason lost:</b></p>${LOST_REASONS.map(r=>`<button class="btn" style="margin:0 6px 6px 0" onclick="markLostFromList('${c.id}','${q.id}','${attr(r)}')">${esc(r)}</button>`).join('')}</div>`;
+    return `<div class="listitem">${nameLine}${detail}<div class="actions" style="margin-top:8px;flex-wrap:wrap">${actions}</div>${picker}</div>`;
   }
   function renderFollowUp(){
     const box=$('followUpList'); if(!box)return;
-    const items=followUpItems();
-    if(!items.length){box.innerHTML='<p>Nothing waiting. Sent quotes will show up here until they\u2019re approved or closed out.</p>'; return;}
-    box.innerHTML=items.map(({c,q,since})=>{
-      const declined=q.status==='Declined';
-      const tag=declined
-        ?'<span class="badge" style="background:#fef3f2;color:#b42318">Declined</span>'
-        :'<span class="badge" style="background:#fffaeb;color:#93370d">Awaiting response</span>';
-      const when=declined?('declined '+timeAgo(since)):('sent '+timeAgo(since));
-      return `<div class="listitem"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(c.name||'Unnamed Customer')}</b>${tag}</div>
-        <p style="margin:4px 0 0">${esc(c.address||'No address')}</p>
-        <p class="small" style="margin:2px 0 0">${esc(q.name&&q.name.toLowerCase()!=='new quote'?q.name+' \u2022 ':'')}${money(q.total||0)} \u2022 ${when}</p>
-        <div class="actions" style="margin-top:8px"><button class="btn" onclick="openFollowUpQuote('${c.id}','${q.id}')">Open Quote</button></div></div>`;
-    }).join('');
+    const {approved,awaiting,declined}=followUpBuckets();
+    if(!approved.length&&!awaiting.length&&!declined.length){
+      box.innerHTML='<p>Nothing waiting. Sent quotes show up here until they\u2019re approved or closed out.</p>'; return;
+    }
+    const band=(title,color,items,kind)=>items.length
+      ?`<h3 style="margin:14px 0 6px"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-right:7px"></span>${title} (${items.length})</h3>`+items.map(it=>followUpRow(it,kind)).join('')
+      :'';
+    box.innerHTML=
+      band('Ready to schedule \u2014 call to set a date','#0f766e',approved,'approved')+
+      band('Awaiting response \u2014 call to follow up','#f59e0b',awaiting,'awaiting')+
+      band('Declined \u2014 call to win it back','#b42318',declined,'declined');
+  }
+  window.toggleLostPicker=function(qid){const el=$('lostPicker-'+qid); if(el)el.classList.toggle('hidden');}
+  window.markApprovedFromList=async function(cid,qid){
+    const c=state.customers.find(x=>x.id===cid); if(!c)return;
+    const q=(c.quotes||[]).find(x=>x.id===qid); if(!q)return;
+    if(!confirm('Mark this quote approved? It moves to Ready to Schedule and the team is notified.'))return;
+    q.status='Approved'; q.approvedAt=new Date().toISOString(); q.updatedAt=q.approvedAt; c.updatedAt=q.approvedAt;
+    if(currentQuote&&currentQuote.id===qid){currentQuote.status='Approved'; quoteEditUnlocked=false;}
+    // void any outstanding customer link so the old email can't also be acted on
+    if(q.approvalToken)voidApproval(q.approvalToken);
+    scheduleSave(); saveNow(); renderFollowUp(); renderAll();
+    // notify the team, same as an email approval
+    notifyApprovedManually(c,q);
+  }
+  async function notifyApprovedManually(c,q){
+    if(!(firebaseReady&&db))return;
+    try{
+      // reuse the approvals email path by writing a one-off record the backend emails from
+      const token=makeToken();
+      await setDoc(doc(db,'approvals',token),{
+        token, companyId:state.companyId, quoteId:q.id, customerId:c.id,
+        customerName:c.name||'', property:c.address||'', quoteText:'', total:q.total||0,
+        notifyEmails:(state.settings.notifyEmails&&state.settings.notifyEmails.length?state.settings.notifyEmails:[OWNER_EMAIL]),
+        status:'pending', createdAt:new Date().toISOString()
+      });
+      await fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:token,decision:'approved'})});
+    }catch(e){}
+  }
+  window.markLostFromList=function(cid,qid,reason){
+    const c=state.customers.find(x=>x.id===cid); if(!c)return;
+    const q=(c.quotes||[]).find(x=>x.id===qid); if(!q)return;
+    let note='';
+    if(reason==='Other'){note=prompt('Reason lost (optional note):')||''; }
+    q.status='Lost'; q.lostReason=reason; q.lostNote=note; q.lostAt=new Date().toISOString();
+    q.updatedAt=q.lostAt; c.updatedAt=q.lostAt;
+    if(currentQuote&&currentQuote.id===qid){currentQuote.status='Lost';}
+    if(q.approvalToken)voidApproval(q.approvalToken);
+    scheduleSave(); saveNow(); renderFollowUp(); renderAll();
   }
   window.openFollowUpQuote=function(cid,qid){activeCustomerId=cid; resumeQuote(cid,qid);}
   function renderTeamAccess(){
