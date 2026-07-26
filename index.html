@@ -582,23 +582,32 @@
     if(!confirm('Mark this quote approved? It moves to Ready to Schedule and the team is notified.'))return;
     q.status='Approved'; q.approvedAt=new Date().toISOString(); q.updatedAt=q.approvedAt; c.updatedAt=q.approvedAt;
     if(currentQuote&&currentQuote.id===qid){currentQuote.status='Approved'; quoteEditUnlocked=false;}
-    // void any outstanding customer link so the old email can't also be acted on
-    if(q.approvalToken)voidApproval(q.approvalToken);
     scheduleSave(); saveNow(); renderFollowUp(); renderAll();
-    // notify the team, same as an email approval
-    notifyApprovedManually(c,q);
+    // mark the customer's existing link approved (so clicking it shows the friendly
+    // "you approved this" message) and notify the team from that same record.
+    approveManuallyAndNotify(c,q);
   }
-  async function notifyApprovedManually(c,q){
+  async function approveManuallyAndNotify(c,q){
     if(!(firebaseReady&&db))return;
     try{
-      // reuse the approvals email path by writing a one-off record the backend emails from
-      const token=makeToken();
-      await setDoc(doc(db,'approvals',token),{
-        token, companyId:state.companyId, quoteId:q.id, customerId:c.id,
-        customerName:c.name||'', property:c.address||'', quoteText:'', total:q.total||0,
-        notifyEmails:(state.settings.notifyEmails&&state.settings.notifyEmails.length?state.settings.notifyEmails:[OWNER_EMAIL]),
-        status:'pending', createdAt:new Date().toISOString()
-      });
+      // if this quote already has an outstanding customer link, approve THAT record
+      // so the customer's emailed link reflects the approval.
+      let token=q.approvalToken;
+      if(!token){
+        // no outstanding link (e.g. never emailed) — make a one-off record just to drive the notice
+        token=makeToken();
+        await setDoc(doc(db,'approvals',token),{
+          token, companyId:state.companyId, quoteId:q.id, customerId:c.id,
+          customerName:c.name||'', property:c.address||'', quoteText:'', total:q.total||0,
+          notifyEmails:(state.settings.notifyEmails&&state.settings.notifyEmails.length?state.settings.notifyEmails:[OWNER_EMAIL]),
+          status:'pending', createdAt:new Date().toISOString()
+        });
+      } else {
+        // make sure the record carries the current notify list before we approve it
+        await setDoc(doc(db,'approvals',token),{
+          notifyEmails:(state.settings.notifyEmails&&state.settings.notifyEmails.length?state.settings.notifyEmails:[OWNER_EMAIL])
+        },{merge:true});
+      }
       await fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:token,decision:'approved'})});
     }catch(e){}
   }
