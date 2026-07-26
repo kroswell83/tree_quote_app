@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Approve Your Tree Service Quote</title>
+  <style>
+    :root{--bg:#f6f7f8;--card:#fff;--ink:#18212b;--muted:#667085;--line:#d9dee5;--accent:#2563eb;--good:#0f766e;--bad:#b42318}
+    *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);padding:18px}
+    .wrap{max-width:600px;margin:0 auto}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 1px 3px rgba(16,24,40,.06)}
+    h1{font-size:22px;margin:0 0 4px}
+    .brand{text-align:center;margin-bottom:14px}
+    .brand h1{font-size:26px}
+    p{color:var(--muted);line-height:1.5}
+    pre{white-space:pre-wrap;font-family:inherit;font-size:15px;color:var(--ink);background:#f9fafb;border:1px solid var(--line);border-radius:10px;padding:14px;line-height:1.5}
+    .price{font-size:28px;font-weight:800;margin:10px 0}
+    .actions{display:flex;gap:10px;margin-top:16px}
+    .btn{flex:1;border:1px solid var(--line);border-radius:10px;padding:14px;font-weight:700;font-size:16px;cursor:pointer;background:#fff;color:var(--ink)}
+    .btn.approve{background:var(--good);border-color:var(--good);color:#fff}
+    .btn.decline{background:#fff;color:var(--bad);border-color:#f3b2ae}
+    .btn:disabled{opacity:.5;cursor:default}
+    .msg{padding:14px;border-radius:10px;margin-top:14px;font-weight:600}
+    .msg.good{background:#ecfdf3;border:1px solid #abefc6;color:#067647}
+    .msg.bad{background:#fef3f2;border:1px solid #fecdca;color:#b42318}
+    .msg.info{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
+    .center{text-align:center}
+    .hidden{display:none}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><h1>Tree Hombres</h1><p>Tree Service Quote</p></div>
+    <div class="card">
+      <div id="loading" class="center"><p>Loading your quote...</p></div>
+      <div id="content" class="hidden">
+        <pre id="quoteText"></pre>
+        <div class="actions" id="actionRow">
+          <button class="btn approve" id="approveBtn" onclick="decide('approved')">Approve Quote</button>
+          <button class="btn decline" id="declineBtn" onclick="decide('declined')">Decline</button>
+        </div>
+        <div id="resultMsg"></div>
+      </div>
+      <div id="error" class="hidden"><div class="msg bad" id="errorText"></div></div>
+    </div>
+    <p class="center" style="margin-top:14px;font-size:13px">Questions? Just reply to the email we sent you.</p>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const token = params.get('t');
+    const $ = id => document.getElementById(id);
+
+    function showError(msg){
+      $('loading').classList.add('hidden');
+      $('content').classList.add('hidden');
+      $('error').classList.remove('hidden');
+      $('errorText').textContent = msg;
+    }
+
+    async function load(){
+      if(!token){ return showError('This link is missing its code. Please use the link from your email.'); }
+      try{
+        const r = await fetch('/api/approve?t=' + encodeURIComponent(token));
+        const d = await r.json();
+        if(!r.ok){ return showError(d.error || 'This quote could not be loaded.'); }
+        $('quoteText').textContent = d.quoteText || '(quote details unavailable)';
+        $('loading').classList.add('hidden');
+        $('content').classList.remove('hidden');
+        // if already decided, reflect it
+        if(d.status === 'approved'){ lockWith('good','You approved this quote. Thank you! We\u2019ll be in touch to schedule.'); }
+        else if(d.status === 'declined'){ lockWith('info','You declined this quote. If that was a mistake, just reply to our email.'); }
+      }catch(e){
+        showError('Something went wrong loading your quote. Please try again.');
+      }
+    }
+
+    function lockWith(kind, msg){
+      $('actionRow').classList.add('hidden');
+      const m = document.createElement('div');
+      m.className = 'msg ' + kind;
+      m.textContent = msg;
+      $('resultMsg').innerHTML = '';
+      $('resultMsg').appendChild(m);
+    }
+
+    async function decide(decision){
+      if(decision === 'declined' && !confirm('Decline this quote?')) return;
+      $('approveBtn').disabled = true; $('declineBtn').disabled = true;
+      $('approveBtn').textContent = decision === 'approved' ? 'Approving...' : 'Approve Quote';
+      try{
+        const r = await fetch('/api/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ t: token, decision })
+        });
+        const d = await r.json();
+        if(!r.ok){
+          if(d.status){ // already decided
+            lockWith('info', 'This quote was already ' + d.status + '.');
+          } else {
+            $('approveBtn').disabled = false; $('declineBtn').disabled = false;
+            $('approveBtn').textContent = 'Approve Quote';
+            lockWith('bad', d.error || 'Could not record your choice. Please try again.');
+          }
+          return;
+        }
+        if(decision === 'approved'){
+          lockWith('good', 'Approved \u2014 thank you! We\u2019ll reach out to schedule your service.');
+        } else {
+          lockWith('info', 'You declined this quote. If that was a mistake, just reply to our email.');
+        }
+      }catch(e){
+        $('approveBtn').disabled = false; $('declineBtn').disabled = false;
+        $('approveBtn').textContent = 'Approve Quote';
+        lockWith('bad', 'Could not reach the server. Please try again.');
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>
