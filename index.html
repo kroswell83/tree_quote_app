@@ -297,6 +297,37 @@
   document.addEventListener('focusout',()=>{setTimeout(()=>{
     if(pendingRender&&!isTyping()){pendingRender=false; renderAll();}
   },150)});
+  // check whether any sent quotes have been approved by the customer, and apply it
+  let approvalTimer=null;
+  async function checkApprovals(){
+    if(!(firebaseReady&&db&&user&&accessGranted))return;
+    let changed=false;
+    for(const c of state.customers){
+      if(c.deleted)continue;
+      for(const q of (c.quotes||[])){
+        if(!q.approvalToken)continue;
+        if(q.status==='Approved'||q.status==='Completed'||q.status==='Paid'||q.status==='Lost')continue;
+        try{
+          const snap=await getDoc(doc(db,'approvals',q.approvalToken));
+          if(snap.exists()){
+            const a=snap.data();
+            if(a.status==='approved'&&q.status!=='Approved'){
+              q.status='Approved'; q.approvedAt=a.approvedAt||new Date().toISOString();
+              q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt; changed=true;
+            } else if(a.status==='declined'&&q.status!=='Lost'){
+              q.status='Lost'; q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt; changed=true;
+            }
+          }
+        }catch(e){}
+      }
+    }
+    if(changed){saveLocal(); scheduleSave(); if(!isTyping())renderAll();}
+  }
+  function startApprovalPolling(){
+    if(approvalTimer)clearInterval(approvalTimer);
+    checkApprovals();
+    approvalTimer=setInterval(checkApprovals,60000); // every minute
+  }
   // "Tree Company", "Tree-Company", "tree company" all resolve to the same id
   function normalizeCompanyId(v){return String(v||'').trim().toLowerCase().replace(/[\s_]+/g,'-').replace(/[^a-z0-9-]/g,'').replace(/-+/g,'-').replace(/^-|-$/g,'')}
   // Exact document ids seen in the Firestore console. Anything listed here is checked
@@ -408,7 +439,7 @@
     accessGranted=true; showApp(true);
     $('userInfo').textContent='Signed in as '+u.email+(isOwner(u.email)?' (owner)':'');
     setAuthMessage('Signed in.');
-    watchCloud(); renderAll();
+    watchCloud(); startApprovalPolling(); renderAll();
   }
   function setupFirebase(){try{if(!window.firebaseConfig){$('firebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';$('authFirebaseBox').textContent='Firebase is not configured yet. Paste your config into firebase-config.js.';setAuthMessage('Firebase must be configured before anyone can sign in.','danger');return}const app=initializeApp(window.firebaseConfig);auth=getAuth(app);db=getFirestore(app);firebaseReady=true;$('firebaseBox').className='ok';$('firebaseBox').textContent='Firebase configured.';$('authFirebaseBox').className='ok';$('authFirebaseBox').textContent='Firebase configured.';onAuthStateChanged(auth,async u=>{user=u; await openForSignedInUser(u);});}catch(e){$('firebaseBox').className='danger';$('firebaseBox').textContent='Firebase error: '+e.message;$('authFirebaseBox').className='danger';$('authFirebaseBox').textContent='Firebase error: '+e.message;}}
   window.signIn=async()=>{if(!firebaseReady)return alert('Firebase not configured yet.'); const email=($('loginEmail').value||'').trim(); const password=$('loginPassword').value||''; if(!email||!password)return setAuthMessage('Enter an email and password.','danger'); setAuthMessage('Signing in...'); await signInWithEmailAndPassword(auth,email,password).catch(e=>setAuthMessage(e.message,'danger'));}
@@ -628,6 +659,23 @@
   function selectedServices(){const set=new Set(); currentQuote.trees.forEach(t=>services.forEach(s=>{if(t.services&&t.services[s])set.add(s)})); return [...set];}
   function makeCustomerQuote(){const c=activeCustomer(); const calc=allCalc(); const svc=selectedServices(); let lines=[]; lines.push('TREE SERVICE QUOTE'); lines.push(''); if(c){lines.push('Customer: '+(c.name||'')); lines.push('Property: '+(c.address||'')); if(c.phone)lines.push('Phone: '+c.phone); if(c.email)lines.push('Email: '+c.email); lines.push('');} const qn=(currentQuote.name||'').trim(); if(qn&&qn.toLowerCase()!=='new quote'){lines.push('Quote: '+qn); lines.push('');} lines.push('Services Included:'); if(svc.length)svc.forEach(s=>lines.push('- '+s)); else lines.push('- No services selected'); lines.push(''); lines.push('Tree count: '+totalTreeCount()); lines.push('Debris haul away: '+(currentQuote.trees.some(t=>t.haul==='Yes')?'Included where selected':'Not included')); lines.push(''); lines.push('Quote Price: '+money(calc.total)); const notes=String(state.settings.quoteNotes||'').trim(); if(notes){lines.push(''); lines.push('Notes:'); notes.split(/\r?\n/).filter(Boolean).forEach(n=>lines.push('- '+n.replace(/^[-•]\s*/,'')));} return lines.join('\n');}
   function makeInternalSummary(){const calc=allCalc(); let lines=['INTERNAL QUOTE SUMMARY','Total: '+money(calc.total),'Tree labor: '+money(calc.treeLabor),'Haul away labor: '+money(calc.haulLabor),'Tree count: '+calc.treeCount,'Tree hours: '+calc.base.toFixed(2),'Haul away hours: '+calc.haul.toFixed(2),'']; currentQuote.trees.forEach((t,i)=>{const tc=treeCalc(t); const sv=services.filter(s=>t.services&&t.services[s]).map(s=>s===TRIM?`${s} (${trimScopeOf(t)})`:s).join(', ')||'No services selected'; lines.push(`Tree ${i+1}: ${t.type} | Qty: ${tc.qty} | ${Number(t.height)||0}ft/${Number(t.canopy)||0}ft/${Number(t.dbh)||0}in | Haul: ${t.haul} | Hours: ${tc.base.toFixed(2)} | Haul hrs: ${tc.haulHours.toFixed(2)} | Total: ${money(tc.total)}${tc.riskyHrs>0?` | ${tc.riskyHrs.toFixed(2)}h risky (+${money(tc.riskyUplift)})`:''} | ${sv}`)}); return lines.join('\n');}
+  function makeToken(){
+    // long unguessable token: 32 chars of url-safe randomness
+    const bytes=new Uint8Array(24); crypto.getRandomValues(bytes);
+    return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  }
+  async function writeApprovalRecord(token,c){
+    if(!(firebaseReady&&db))return false;
+    const rec={
+      token, companyId:state.companyId,
+      quoteId:currentQuote.id, customerId:c.id,
+      customerName:c.name||'', property:c.address||'',
+      quoteText:makeCustomerQuote(), total:allCalc().total,
+      status:'pending', createdAt:new Date().toISOString()
+    };
+    await setDoc(doc(db,'approvals',token),rec);
+    return true;
+  }
   window.emailQuote=async function(){
     const c=activeCustomer();
     if(!c)return alert('Select a customer for this quote first.');
@@ -636,10 +684,6 @@
     if(!(currentQuote.trees||[]).length)return alert('Add at least one tree before sending.');
     if(!confirm('Email this quote to '+to+'?'))return;
 
-    const subject='Tree Service Quote'+(c.name?' for '+c.name:'');
-    const text=makeCustomerQuote();
-    const replyTo=(state.settings.replyToEmail||'').trim()||undefined;
-
     // find the button so we can show progress
     const btns=[...document.querySelectorAll('#quote .actions button')];
     const btn=btns.find(b=>/Email to Customer|Sending|Sent/i.test(b.textContent));
@@ -647,6 +691,19 @@
     setBtn('Sending...',true);
 
     try{
+      // fresh token each send, so an old link can't approve a changed quote
+      const token=makeToken();
+      currentQuote.approvalToken=token;
+      await writeApprovalRecord(token,c);
+      const link='https://quote.treehombres.com/approve.html?t='+token;
+
+      const subject='Tree Service Quote'+(c.name?' for '+c.name:'');
+      const text=makeCustomerQuote()
+        +'\n\n----------------------------------------\n'
+        +'To APPROVE this quote, open this link and tap Approve:\n'+link
+        +'\n----------------------------------------';
+      const replyTo=(state.settings.replyToEmail||'').trim()||undefined;
+
       const res=await fetch('/api/send-quote',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -660,7 +717,7 @@
       saveQuoteToCustomer(true);
       setBtn('Sent \u2713',true);
       setTimeout(()=>setBtn('Email to Customer',false),2500);
-      alert('Quote emailed to '+to+' and marked Sent.');
+      alert('Quote emailed to '+to+' with an approval link, and marked Sent.');
     }catch(e){
       setBtn('Email to Customer',false);
       alert('Could not send: '+e.message);
