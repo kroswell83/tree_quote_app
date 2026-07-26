@@ -80,7 +80,7 @@
       <div id="quoteCustomerBox"></div>
       <div class="divider"></div>
       <label>Quote name</label><input id="quoteName" oninput="currentQuote.name=this.value; scheduleSave(); renderSummary();" />
-      <label>Status</label><select id="quoteStatus" onchange="currentQuote.status=this.value; if(this.value==='Approved'||this.value==='Sent')quoteEditUnlocked=false; scheduleSave(); renderSummary();"><option>Draft</option><option>Sent</option><option>Approved</option><option>Completed</option><option>Lost</option></select>
+      <label>Status</label><select id="quoteStatus" onchange="currentQuote.status=this.value; if(this.value==='Approved'||this.value==='Sent')quoteEditUnlocked=false; scheduleSave(); renderSummary();"><option>Draft</option><option>Sent</option><option>Approved</option><option>Declined</option><option>Completed</option><option>Lost</option></select>
       <div class="total" id="grandTotal">$0</div>
       <div class="pillrow" style="margin-top:10px"><span class="pill" id="treeCount">0 trees</span><span class="pill" id="hoursTotal">0 hours</span><span class="pill" id="haulHoursTotal">0 haul hrs</span></div>
       <div class="divider"></div>
@@ -321,10 +321,11 @@
               q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt; changed=true;
               // if this quote is the one open on screen, mirror the status live
               if(currentQuote&&currentQuote.id===q.id){currentQuote.status='Approved'; quoteEditUnlocked=false; if($('quoteStatus'))$('quoteStatus').value='Approved';}
-            } else if(a.status==='declined'&&q.status!=='Lost'){
-              q.status='Lost'; delete q.edited; delete q.baseline;
+            } else if(a.status==='declined'&&q.status!=='Declined'&&q.status!=='Lost'){
+              q.status='Declined'; q.declinedAt=a.approvedAt||new Date().toISOString();
+              delete q.edited; delete q.baseline;
               q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt; changed=true;
-              if(currentQuote&&currentQuote.id===q.id){currentQuote.status='Lost'; if($('quoteStatus'))$('quoteStatus').value='Lost';}
+              if(currentQuote&&currentQuote.id===q.id){currentQuote.status='Declined'; if($('quoteStatus'))$('quoteStatus').value='Declined';}
             }
           }
         }catch(e){}
