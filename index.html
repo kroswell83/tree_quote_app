@@ -829,7 +829,8 @@
     const q=(c.quotes||[]).find(x=>x.id===qid); if(!q)return;
     scheduleDialogTarget={cid,qid};
     const dlg=$('scheduleDialog');
-    $('schedDlgTitle').textContent=(existing?'Edit time — ':'Schedule — ')+(c.name||'Customer');
+    $('schedDlgTitle').innerHTML=(existing?'Edit time — ':'Schedule — ')+esc(c.name||'Customer')+
+      (q.jobHours?` <span class="badge" style="background:#eef4ff;color:#1e40af;float:right">${(Math.round(q.jobHours*10)/10)} hrs</span>`:'');
     $('schedDlgDate').value=q.scheduledDate||ymd(new Date());
     $('schedDlgStart').value=q.startTime||'08:00';
     $('schedDlgEndDate').value=q.scheduledEndDate||q.scheduledDate||ymd(new Date());
@@ -935,7 +936,7 @@
     if(!(currentQuote.trees||[]).length && i<0)return;
     const rec=clone(currentQuote);
     delete rec.draft; delete rec.edited; delete rec.baseline;
-    rec.total=allCalc().total; rec.updatedAt=new Date().toISOString();
+    const _calc=allCalc(); rec.total=_calc.total; rec.jobHours=_calc.base+_calc.haul; rec.updatedAt=new Date().toISOString();
     if(i>=0)c.quotes[i]=rec; else c.quotes.unshift(rec);
     c.updatedAt=rec.updatedAt; activeQuoteId=currentQuote.id;
   }
