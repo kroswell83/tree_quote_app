@@ -558,7 +558,7 @@
     } else {
       actions=`<button class="btn good" onclick="markApprovedFromList('${c.id}','${q.id}')">Mark Approved</button><button class="btn bad" onclick="toggleLostPicker('${q.id}')">Mark Lost</button><button class="btn" onclick="openFollowUpQuote('${c.id}','${q.id}')">Open Quote</button>`;
     }
-    const picker=`<div id="lostPicker-${q.id}" class="hidden" style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px"><p class="small" style="margin:0 0 6px"><b>Reason lost:</b></p>${LOST_REASONS.map(r=>`<button class="btn" style="margin:0 6px 6px 0" onclick="markLostFromList('${c.id}','${q.id}','${attr(r)}')">${esc(r)}</button>`).join('')}</div>`;
+    const picker=`<div id="lostPicker-${q.id}" class="hidden" style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px"><p class="small" style="margin:0 0 6px"><b>Reason lost:</b></p>${LOST_REASONS.map((r,i)=>`<button class="btn" style="margin:0 6px 6px 0" onclick="markLostFromList('${c.id}','${q.id}',${i})">${esc(r)}</button>`).join('')}</div>`;
     return `<div class="listitem">${nameLine}${detail}<div class="actions" style="margin-top:8px;flex-wrap:wrap">${actions}</div>${picker}</div>`;
   }
   function renderFollowUp(){
@@ -602,9 +602,10 @@
       await fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:token,decision:'approved'})});
     }catch(e){}
   }
-  window.markLostFromList=function(cid,qid,reason){
+  window.markLostFromList=function(cid,qid,reasonIdx){
     const c=state.customers.find(x=>x.id===cid); if(!c)return;
     const q=(c.quotes||[]).find(x=>x.id===qid); if(!q)return;
+    const reason=LOST_REASONS[reasonIdx]||'Not specified';
     let note='';
     if(reason==='Other'){note=prompt('Reason lost (optional note):')||''; }
     q.status='Lost'; q.lostReason=reason; q.lostNote=note; q.lostAt=new Date().toISOString();
