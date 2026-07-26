@@ -222,6 +222,7 @@
   let activeCustomerId=null, activeQuoteId=null, quoteEditUnlocked=false;
   let auth=null,db=null,user=null,firebaseReady=false,accessGranted=false,saveTimer=null;
   const $=id=>document.getElementById(id); const money=n=>'$'+Math.round(Number(n||0)).toLocaleString();
+  const moneyShort=n=>{n=Number(n||0); if(n>=1000){const k=n/1000; return '$'+(k>=10?Math.round(k):k.toFixed(1).replace(/\.0$/,''))+'k';} return '$'+Math.round(n);};
   function uid(){return (crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random())).replaceAll('-','').slice(0,18)}
   function clone(x){return JSON.parse(JSON.stringify(x))}
   function deepMerge(target,src){for(const k in src){if(src[k]&&typeof src[k]==='object'&&!Array.isArray(src[k])){target[k]=deepMerge(target[k]||{},src[k])}else target[k]=src[k]}return target}
@@ -701,19 +702,62 @@
     }));
     return out;
   }
-  function jobCardHtml(c,q){
+  function jobCardHtml(c,q,dayKey){
     const time=(q.startTime||q.endTime)?`${fmtTime(q.startTime)}${q.endTime?'–'+fmtTime(q.endTime):''}`:'time TBD';
+    const multi=isMultiDay(q);
+    const share=dayKey?jobDayShare(q,dayKey):(Number(q.total)||0);
+    const dollarLabel=multi?`${money(share)} <span class="small">of ${money(q.total||0)}</span>`:money(q.total||0);
+    const spanNote=multi?`<span class="badge" style="background:#eef4ff;color:#1e40af">multi-day</span>`:'';
     return `<div class="listitem" style="margin:6px 0 0;background:#fff" draggable="true" ondragstart="scheduleDragStart(event,'${c.id}','${q.id}')">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-        <span><b>${esc(c.name||'Customer')}</b> — ${money(q.total||0)}</span>
-        <span class="small">${time}</span>
+        <span><b>${esc(c.name||'Customer')}</b> — ${dollarLabel}</span>
+        <span class="small">${time} ${spanNote}</span>
       </div>
       <p class="small" style="margin:2px 0 0">${esc(c.address||'')}</p>
       <div class="actions" style="margin-top:6px"><button class="btn" onclick="openRescheduleDialog('${c.id}','${q.id}')">Edit time</button><button class="btn bad" onclick="unschedule('${c.id}','${q.id}')">Remove</button></div>
     </div>`;
   }
+  // ---- multi-day span math ----
+  const WORK_START_HOUR=6, WORK_END_HOUR=21;   // 6am through the 8pm hour = ends 9pm (21:00)
+  const FULL_DAY_HOURS=WORK_END_HOUR-WORK_START_HOUR;  // 15
+  function hourOf(t){const [h]=String(t||'').split(':').map(Number); return isFinite(h)?h:WORK_START_HOUR;}
+  // returns array of {key, hours} for each day the job touches
+  function spanDays(startDate,startTime,endDate,endTime){
+    const s=parseYmd(startDate), e=parseYmd(endDate||startDate);
+    if(e<s)return [{key:ymd(s),hours:FULL_DAY_HOURS}];
+    const sameDay=ymd(s)===ymd(e);
+    if(sameDay){
+      const h=Math.max(1,(hourOf(endTime)-hourOf(startTime)));
+      return [{key:ymd(s),hours:h}];
+    }
+    const out=[]; const cur=new Date(s);
+    while(cur<=e){
+      const key=ymd(cur);
+      let hours;
+      if(key===ymd(s))hours=Math.max(1,WORK_END_HOUR-hourOf(startTime));   // first day: start-time to 9pm
+      else if(key===ymd(e))hours=Math.max(1,hourOf(endTime)-WORK_START_HOUR); // last day: 6am to end-time
+      else hours=FULL_DAY_HOURS;                                            // full middle day
+      out.push({key,hours});
+      cur.setDate(cur.getDate()+1);
+    }
+    return out;
+  }
+  // total dollars for a job that falls on a given day key (its per-day share)
+  function jobDayShare(q,dayKey){
+    if(!q.scheduledDate)return 0;
+    const days=spanDays(q.scheduledDate,q.startTime,q.scheduledEndDate,q.endTime);
+    const total=days.reduce((s,d)=>s+d.hours,0)||1;
+    const thisDay=days.find(d=>d.key===dayKey);
+    if(!thisDay)return 0;
+    return (Number(q.total)||0)*(thisDay.hours/total);
+  }
+  function isMultiDay(q){return q.scheduledEndDate && q.scheduledEndDate!==q.scheduledDate;}
+  // does this job appear on this day?
+  function jobOnDay(q,dayKey){
+    return spanDays(q.scheduledDate,q.startTime,q.scheduledEndDate,q.endTime).some(d=>d.key===dayKey);
+  }
   function jobsOn(jobs,key){
-    return jobs.filter(j=>j.q.scheduledDate===key)
+    return jobs.filter(j=>jobOnDay(j.q,key))
       .sort((a,b)=>String(a.q.startTime||'').localeCompare(String(b.q.startTime||'')));
   }
   function dayCell(jobs,day,{big}={}){
@@ -722,7 +766,7 @@
     const isToday=ymd(new Date())===key;
     let h=`<div class="listitem" style="${isToday?'border-color:var(--accent);background:#eff6ff':''}">
       <div style="display:flex;justify-content:space-between;align-items:center"><b>${big?day.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'}):prettyDate(day)}${isToday?' • Today':''}</b><span class="small">${todays.length?todays.length+' job(s)':''}</span></div>`;
-    if(todays.length)h+=todays.map(({c,q})=>jobCardHtml(c,q)).join('');
+    if(todays.length)h+=todays.map(({c,q})=>jobCardHtml(c,q,key)).join('');
     h+=`<div ondragover="event.preventDefault()" ondrop="scheduleDrop(event,'${key}')" style="height:18px;border:1px dashed transparent"></div></div>`;
     return h;
   }
@@ -757,12 +801,14 @@
       for(let i=0;i<42;i++){
         const day=new Date(gridStart); day.setDate(day.getDate()+i);
         const key=ymd(day);
-        const count=jobsOn(jobs,key).length;
+        const dayJobs=jobsOn(jobs,key);
+        const count=dayJobs.length;
+        const dayTotal=dayJobs.reduce((s,j)=>s+jobDayShare(j.q,key),0);
         const inMonth=day.getMonth()===monthIdx;
         const isToday=ymd(new Date())===key;
-        html+=`<div ondragover="event.preventDefault()" ondrop="scheduleDrop(event,'${key}')" onclick="jumpToDay('${key}')" style="min-height:52px;border:1px solid var(--line);border-radius:8px;padding:4px;cursor:pointer;${isToday?'border-color:var(--accent);background:#eff6ff':inMonth?'':'background:#f9fafb;color:#98a2b3'}">
+        html+=`<div ondragover="event.preventDefault()" ondrop="scheduleDrop(event,'${key}')" onclick="jumpToDay('${key}')" style="min-height:56px;border:1px solid var(--line);border-radius:8px;padding:4px;cursor:pointer;${isToday?'border-color:var(--accent);background:#eff6ff':inMonth?'':'background:#f9fafb;color:#98a2b3'}">
           <div class="small" style="font-weight:700">${day.getDate()}</div>
-          ${count?`<div class="small" style="margin-top:2px;background:var(--good);color:#fff;border-radius:6px;text-align:center;padding:1px 0">${count} job${count>1?'s':''}</div>`:''}
+          ${count?`<div style="margin-top:2px;background:var(--good);color:#fff;border-radius:6px;text-align:center;padding:2px 1px;line-height:1.2"><div style="font-size:11px;font-weight:700">${moneyShort(dayTotal)}</div><div style="font-size:9px;opacity:.9">${count} job${count>1?'s':''}</div></div>`:''}
         </div>`;
         if(i>=34&&day.getMonth()!==monthIdx&&day.getDay()===6)break; // stop after last needed week
       }
@@ -786,9 +832,20 @@
     $('schedDlgTitle').textContent=(existing?'Edit time — ':'Schedule — ')+(c.name||'Customer');
     $('schedDlgDate').value=q.scheduledDate||ymd(new Date());
     $('schedDlgStart').value=q.startTime||'08:00';
+    $('schedDlgEndDate').value=q.scheduledEndDate||q.scheduledDate||ymd(new Date());
     $('schedDlgEnd').value=q.endTime||'12:00';
+    updateSpanNote();
     dlg.classList.remove('hidden');
   }
+  function updateSpanNote(){
+    const el=$('schedDlgSpanNote'); if(!el)return;
+    const sd=$('schedDlgDate').value, st=$('schedDlgStart').value, ed=$('schedDlgEndDate').value, et=$('schedDlgEnd').value;
+    if(!sd||!ed||ed===sd){el.textContent=''; return;}
+    const days=spanDays(sd,st,ed,et);
+    const totalH=days.reduce((s,d)=>s+d.hours,0);
+    el.innerHTML='Spans '+days.length+' days, ~'+totalH+' working hours. The job\u2019s price is split across days by hours.';
+  }
+  window.schedSpanChanged=updateSpanNote;
   window.openScheduleDialog=function(cid,qid){openSchedulePicker(cid,qid,false);}
   window.openRescheduleDialog=function(cid,qid){openSchedulePicker(cid,qid,true);}
   window.closeScheduleDialog=function(){$('scheduleDialog').classList.add('hidden'); scheduleDialogTarget=null;}
@@ -797,10 +854,12 @@
     const {cid,qid}=scheduleDialogTarget;
     const c=state.customers.find(x=>x.id===cid); if(!c)return closeScheduleDialog();
     const q=(c.quotes||[]).find(x=>x.id===qid); if(!q)return closeScheduleDialog();
-    const date=$('schedDlgDate').value, start=$('schedDlgStart').value, end=$('schedDlgEnd').value;
-    if(!date)return alert('Pick a date.');
-    if(start&&end&&end<=start)return alert('End time must be after start time.');
-    q.scheduledDate=date; q.startTime=start; q.endTime=end;
+    const date=$('schedDlgDate').value, start=$('schedDlgStart').value;
+    const endDate=$('schedDlgEndDate').value||date, end=$('schedDlgEnd').value;
+    if(!date)return alert('Pick a start date.');
+    if(endDate<date)return alert('End date can\'t be before the start date.');
+    if(endDate===date && start && end && end<=start)return alert('For a same-day job, end time must be after start time.');
+    q.scheduledDate=date; q.startTime=start; q.scheduledEndDate=endDate; q.endTime=end;
     if(!Array.isArray(q.crew))q.crew=[];        // crew data foundation (UI later)
     q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt;
     scheduleAnchor=parseYmd(date);   // jump the view to the date we just scheduled into
@@ -810,7 +869,7 @@
     const c=state.customers.find(x=>x.id===cid); if(!c)return;
     const q=(c.quotes||[]).find(x=>x.id===qid); if(!q)return;
     if(!confirm('Remove this job from the schedule? It goes back to Ready to Schedule.'))return;
-    delete q.scheduledDate; delete q.startTime; delete q.endTime;
+    delete q.scheduledDate; delete q.startTime; delete q.endTime; delete q.scheduledEndDate;
     q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt;
     scheduleSave(); saveNow(); renderSchedule(); renderAll();
   }
@@ -824,7 +883,16 @@
     const c=state.customers.find(x=>x.id===cid); if(!c)return;
     const q=(c.quotes||[]).find(x=>x.id===qid); if(!q)return;
     if(q.scheduledDate===dateKey)return;         // dropped on same day, nothing to do
-    q.scheduledDate=dateKey; q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt;
+    // shift the whole span by the number of days moved, so multi-day jobs stay intact
+    const oldStart=parseYmd(q.scheduledDate), newStart=parseYmd(dateKey);
+    const shiftDays=Math.round((newStart-oldStart)/86400000);
+    q.scheduledDate=dateKey;
+    if(q.scheduledEndDate&&q.scheduledEndDate!==q.scheduledDate){
+      const ne=parseYmd(q.scheduledEndDate); ne.setDate(ne.getDate()+shiftDays); q.scheduledEndDate=ymd(ne);
+    } else {
+      q.scheduledEndDate=dateKey;
+    }
+    q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt;
     scheduleSave(); saveNow(); renderSchedule();
   }
   function renderTeamAccess(){
@@ -1172,14 +1240,17 @@
   loadLocal(); ensureSettings(); migrateAll(); if(state.customers.length===0){state.customers.push({id:'samplecustomer',name:'Sample Customer',address:'123 Live Oak Dr, Georgetown, TX',phone:'',email:'',notes:'',quotes:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}); activeCustomerId='samplecustomer'} if(currentQuote.trees.length===0){currentQuote.customerId=activeCustomerId; currentQuote.trees.push({id:'sampletree',type:'Live Oak',qty:1,height:35,dbh:18,canopy:35,haul:'Yes',hazardCount:1,removalRisky:'No',trimScope:'Standard',services:{[TRIM]:true}});} setupFirebase(); renderAll();
 </script>
   <div id="scheduleDialog" class="hidden" style="position:fixed;inset:0;background:rgba(16,24,40,.45);display:flex;align-items:center;justify-content:center;padding:14px;z-index:50">
-    <div class="card" style="max-width:420px;width:100%;box-sizing:border-box">
+    <div class="card" style="max-width:420px;width:100%;box-sizing:border-box;overflow:hidden">
       <h3 id="schedDlgTitle" style="margin:0 0 10px">Schedule</h3>
-      <label>Date</label>
-      <input id="schedDlgDate" type="date" />
-      <div class="row">
-        <div><label>Start time</label><input id="schedDlgStart" type="time" /></div>
-        <div><label>End time</label><input id="schedDlgEnd" type="time" /></div>
-      </div>
+      <label>Start date</label>
+      <input id="schedDlgDate" type="date" oninput="schedSpanChanged()" style="display:block;width:100%;box-sizing:border-box" />
+      <label>Start time</label>
+      <input id="schedDlgStart" type="time" step="3600" oninput="schedSpanChanged()" style="display:block;width:100%;box-sizing:border-box" />
+      <label>End date <span class="small" style="font-weight:400">(same day for a normal job)</span></label>
+      <input id="schedDlgEndDate" type="date" oninput="schedSpanChanged()" style="display:block;width:100%;box-sizing:border-box" />
+      <label>End time</label>
+      <input id="schedDlgEnd" type="time" step="3600" oninput="schedSpanChanged()" style="display:block;width:100%;box-sizing:border-box" />
+      <p class="small" id="schedDlgSpanNote" style="margin-top:8px"></p>
       <div class="actions" style="margin-top:14px">
         <button class="btn good" onclick="confirmSchedule()">Save</button>
         <button class="btn" onclick="closeScheduleDialog()">Cancel</button>
