@@ -64,6 +64,15 @@
         const r = await fetch('/api/approve?t=' + encodeURIComponent(token));
         const d = await r.json();
         if(!r.ok){ return showError(d.error || 'This quote could not be loaded.'); }
+        // this quote was pulled back for changes — don't show old numbers or buttons
+        if(d.status === 'voided'){
+          $('loading').classList.add('hidden');
+          $('content').classList.remove('hidden');
+          $('quoteText').classList.add('hidden');
+          $('actionRow').classList.add('hidden');
+          lockWith('info', 'We\u2019re updating this quote and will re-send it for your approval shortly. Thanks for your patience \u2014 no action is needed right now.');
+          return;
+        }
         $('quoteText').textContent = d.quoteText || '(quote details unavailable)';
         $('loading').classList.add('hidden');
         $('content').classList.remove('hidden');
