@@ -17,7 +17,7 @@ export default async function handler(req, res) {
   }
 
   const token = (req.query && req.query.t) || (req.body && req.body.t);
-  if (!token || !/^[A-Za-z0-9_-]{16,64}$/.test(String(token))) {
+  if (!token || !/^[A-Za-z0-9_-]{16,80}$/.test(String(token))) {
     return res.status(400).json({ error: 'Invalid or missing approval token.' });
   }
 
@@ -78,6 +78,40 @@ export default async function handler(req, res) {
         const err = await pr.json().catch(() => ({}));
         return res.status(500).json({ error: (err.error && err.error.message) || 'Could not record your decision.' });
       }
+
+      // On approval, email the team that a job needs scheduling. Best-effort:
+      // never fail the customer's approval just because the notice email hiccuped.
+      if (decision === 'approved') {
+        try {
+          const f = curDoc.fields || {};
+          const gv = (x) => (x ? (x.stringValue ?? x.integerValue ?? x.doubleValue ?? '') : '');
+          const recipients = [];
+          const ne = f.notifyEmails && f.notifyEmails.arrayValue && f.notifyEmails.arrayValue.values;
+          if (Array.isArray(ne)) ne.forEach((v) => { if (v.stringValue) recipients.push(v.stringValue); });
+          if (recipients.length && process.env.RESEND_API_KEY) {
+            const name = gv(f.customerName) || 'Customer';
+            const prop = gv(f.property) || '';
+            const total = Number(gv(f.total) || 0);
+            const body =
+              'A customer approved their quote and the job needs scheduling.\n\n' +
+              'Customer: ' + name + '\n' +
+              (prop ? 'Property: ' + prop + '\n' : '') +
+              'Quote total: $' + Math.round(total).toLocaleString() + '\n\n' +
+              'Open the app to move it from To Be Scheduled onto the calendar.';
+            await fetch('https://api.resend.com/emails', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                from: 'Tree Hombres <quotes@treehombres.com>',
+                to: recipients,
+                subject: 'Job approved - needs scheduling: ' + name,
+                text: body,
+              }),
+            });
+          }
+        } catch (e) { /* notice email is best-effort */ }
+      }
+
       return res.status(200).json({ ok: true, status: decision });
     } catch (e) {
       return res.status(500).json({ error: 'Could not record your decision.' });
