@@ -80,7 +80,7 @@
       <div id="quoteCustomerBox"></div>
       <div class="divider"></div>
       <label>Quote name</label><input id="quoteName" oninput="currentQuote.name=this.value; scheduleSave(); renderSummary();" />
-      <label>Status</label><select id="quoteStatus" onchange="currentQuote.status=this.value; quoteLocked=(this.value==='Approved'); scheduleSave(); renderSummary();"><option>Draft</option><option>Sent</option><option>Approved</option><option>Completed</option><option>Lost</option></select>
+      <label>Status</label><select id="quoteStatus" onchange="currentQuote.status=this.value; if(this.value==='Approved')quoteEditUnlocked=false; scheduleSave(); renderSummary();"><option>Draft</option><option>Sent</option><option>Approved</option><option>Completed</option><option>Lost</option></select>
       <div class="total" id="grandTotal">$0</div>
       <div class="pillrow" style="margin-top:10px"><span class="pill" id="treeCount">0 trees</span><span class="pill" id="hoursTotal">0 hours</span><span class="pill" id="haulHoursTotal">0 haul hrs</span></div>
       <div class="divider"></div>
@@ -179,7 +179,7 @@
   const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',components:structuredClone(defaultComponents),lotPass:structuredClone(defaultLotPass),serviceRates:structuredClone(defaultServiceRates),serviceHaulMult:defaultHaulMult,deadwoodRisky:false,hazardRisky:true,stormRisky:false,species:defaultSpecies,allowedEmails:[],notifyEmails:[OWNER_EMAIL]};
   let state={settings:structuredClone(defaultSettings),treeTypes:[...defaultTreeTypes],customers:[],companyId:'tree-company'};
   let currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-  let activeCustomerId=null, activeQuoteId=null, quoteLocked=false;
+  let activeCustomerId=null, activeQuoteId=null, quoteEditUnlocked=false;
   let auth=null,db=null,user=null,firebaseReady=false,accessGranted=false,saveTimer=null;
   const $=id=>document.getElementById(id); const money=n=>'$'+Math.round(Number(n||0)).toLocaleString();
   function uid(){return (crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random())).replaceAll('-','').slice(0,18)}
@@ -320,7 +320,7 @@
               delete q.edited; delete q.baseline;
               q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt; changed=true;
               // if this quote is the one open on screen, mirror the status live
-              if(currentQuote&&currentQuote.id===q.id){currentQuote.status='Approved'; quoteLocked=true; if($('quoteStatus'))$('quoteStatus').value='Approved';}
+              if(currentQuote&&currentQuote.id===q.id){currentQuote.status='Approved'; quoteEditUnlocked=false; if($('quoteStatus'))$('quoteStatus').value='Approved';}
             } else if(a.status==='declined'&&q.status!=='Lost'){
               q.status='Lost'; delete q.edited; delete q.baseline;
               q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt; changed=true;
@@ -558,7 +558,7 @@
     currentQuote=clone(q); currentQuote.customerId=customerId;
     delete currentQuote.draft; delete currentQuote.edited; delete currentQuote.baseline;
     activeQuoteId=q.id;
-    quoteLocked=(currentQuote.status==='Approved');   // approved quotes open locked
+    quoteEditUnlocked=false;   // any approved quote opens locked until Edit is tapped
     saveLocal(); renderAll(); showTab('quote');
   }
   window.newQuoteForCustomer=function(){
@@ -566,13 +566,13 @@
     if(!c){alert('Select or create a customer first.'); return;}
     persistCurrentQuote();
     currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],customerId:c.id,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-    activeQuoteId=null; quoteLocked=false; persistCurrentQuote(); saveLocal(); renderAll(); showTab('quote');
+    activeQuoteId=null; quoteEditUnlocked=false; persistCurrentQuote(); saveLocal(); renderAll(); showTab('quote');
   }
   window.unlockQuoteForEdit=function(){
     if(!confirm('This quote is approved. Editing it will set it back to Draft and it will need to be re-sent to the customer for approval. Continue?'))return;
+    quoteEditUnlocked=true;
     currentQuote.status='Draft';
     currentQuote.approvalToken='';          // old approval link no longer applies
-    quoteLocked=false;
     persistCurrentQuote(); saveLocal(); scheduleSave(); renderAll();
   }
     window.duplicateQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); currentQuote.id=uid(); currentQuote.customerId=c.id; currentQuote.name=(currentQuote.name||'Quote')+' Copy'; currentQuote.status='Draft'; currentQuote.createdAt=new Date().toISOString(); activeQuoteId=null; renderAll(); showTab('quote');}
@@ -816,17 +816,15 @@
   }
   function renderTreeTypes(){$('treeTypesList').innerHTML=state.treeTypes.map(t=>`<div class="check"><span style="flex:1">${esc(t)}</span><input type="number" step="0.05" min="0.05" style="width:80px" value="${state.settings.species?.[t]??1}" onchange="updateSpecies('${attr(t)}',this.value)"><button class="btn bad" onclick="deleteTreeType('${attr(t)}')">Delete</button></div>`).join('')}
   function applyQuoteLock(){
-    const locked=!!quoteLocked;
+    // lock is derived straight from the quote's status, so it can never drift out of sync
+    const locked=(currentQuote&&currentQuote.status==='Approved'&&!quoteEditUnlocked);
     const eb=$('editQuoteBtn'), lb=$('lockedBanner');
     if(eb)eb.classList.toggle('hidden',!locked);
     if(lb)lb.classList.toggle('hidden',!locked);
-    // disable/enable every input on the quote screen except the always-available action buttons
     const quote=$('quote'); if(!quote)return;
     quote.querySelectorAll('input,select,textarea').forEach(el=>{ el.disabled=locked; });
-    // the tree "Add Tree" button and per-tree controls live in #treeList / #quoteBottomActions
     ['treeList','quoteBottomActions'].forEach(id=>{const box=$(id); if(box)box.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=locked);});
-    // keep the action buttons usable
-    ['editQuoteBtn'].forEach(id=>{const b=$(id); if(b)b.disabled=false;});
+    if(eb)eb.disabled=false;
   }
   function renderSummary(){const c=allCalc();
     applyQuoteLock(); $('quoteName').value=currentQuote.name||''; $('quoteStatus').value=currentQuote.status||'Draft'; $('grandTotal').textContent=money(c.total); $('treeCount').textContent=c.treeCount+' trees'; $('hoursTotal').textContent=c.base.toFixed(2)+' tree hrs'; $('haulHoursTotal').textContent=c.haul.toFixed(2)+' haul hrs'; $('treeLabor').textContent=money(c.treeLabor); $('haulLabor').textContent=money(c.haulLabor); $('minChargeText').textContent=money(state.settings.minCharge); $('customerQuoteText').value=makeCustomerQuote(); $('internalSummaryText').value=makeInternalSummary();}
