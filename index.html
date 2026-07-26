@@ -43,6 +43,7 @@
   <div class="tabs">
     <button class="tab active" onclick="showTab('customers')" id="tab-customers">Customers</button>
     <button class="tab" onclick="showTab('followup')" id="tab-followup">Follow Up</button>
+    <button class="tab" onclick="showTab('reports')" id="tab-reports">Reports</button>
     <button class="tab hidden" onclick="showTab('quote')" id="tab-quote">Quote</button>
     <button class="tab" onclick="showTab('settings')" id="tab-settings">Settings</button>
     <button class="tab" onclick="showTab('trees')" id="tab-trees">Tree List</button>
@@ -79,6 +80,17 @@
       <h2>Follow Up</h2>
       <p class="small">Every quote that's been sent and is still open. Oldest at the top. A quote leaves this list when the customer approves it, or when you close it out as Lost.</p>
       <div id="followUpList" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section id="reports" class="hidden">
+    <div class="card">
+      <h2>Reports</h2>
+      <p class="small">Business reports. More coming as we go.</p>
+      <div class="divider"></div>
+      <h3>Lost Jobs</h3>
+      <p class="small">Quotes you closed out as Lost, grouped by reason.</p>
+      <div id="lostReport" style="margin-top:10px"></div>
     </div>
   </section>
 
@@ -602,6 +614,25 @@
     scheduleSave(); saveNow(); renderFollowUp(); renderAll();
   }
   window.openFollowUpQuote=function(cid,qid){activeCustomerId=cid; resumeQuote(cid,qid);}
+  function renderReports(){
+    const box=$('lostReport'); if(!box)return;
+    const counts={}; let total=0;
+    liveCustomers().forEach(c=>liveQuotes(c).forEach(q=>{
+      if(q.status==='Lost'){
+        const r=q.lostReason||'Not specified';
+        counts[r]=(counts[r]||0)+1; total++;
+      }
+    }));
+    if(total===0){box.innerHTML='<p>No lost jobs yet. When you mark a quote Lost from the Follow Up list, it shows up here by reason.</p>'; return;}
+    // order the known reasons first, then anything else, then Not specified last
+    const order=[...LOST_REASONS,'Not specified'];
+    const keys=Object.keys(counts).sort((a,b)=>{
+      const ia=order.indexOf(a), ib=order.indexOf(b);
+      return (ia<0?99:ia)-(ib<0?99:ib);
+    });
+    const rows=keys.map(r=>`<div class="listitem" style="display:flex;justify-content:space-between;align-items:center"><span>${esc(r)}</span><b>${counts[r]}</b></div>`).join('');
+    box.innerHTML=`<div class="listitem" style="display:flex;justify-content:space-between;align-items:center;background:#f9fafb"><b>Total lost jobs</b><b>${total}</b></div>${rows}`;
+  }
   function renderTeamAccess(){
     const box=$('teamAccessList'); if(!box)return;
     const rows=[`<div class="listitem" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="flex:1;min-width:140px">${esc(OWNER_EMAIL)}</b><span class="badge">Owner</span>${notifyToggleHtml(OWNER_EMAIL)}</div>`];
@@ -610,7 +641,7 @@
     });
     box.innerHTML=rows.join('')+'<p class="small" style="margin-top:6px">“Alerts ON” means this person is emailed when a customer approves a quote. At least one person must always have alerts on.</p>';
   }
-  window.showTab=tab=>{['customers','followup','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);}); if(tab==='customers'&&$('customerListView')){showCustomerDetail(false); renderCustomers();} if(tab==='followup')renderFollowUp();}
+  window.showTab=tab=>{['customers','followup','reports','quote','settings','trees','sync'].forEach(t=>{$(t).classList.toggle('hidden',t!==tab);$('tab-'+t).classList.toggle('active',t===tab);}); if(tab==='customers'&&$('customerListView')){showCustomerDetail(false); renderCustomers();} if(tab==='followup')renderFollowUp(); if(tab==='reports')renderReports();}
 
   function activeCustomer(){const c=state.customers.find(x=>x.id===activeCustomerId); return (c&&!c.deleted)?c:null}
   function liveCustomers(){return state.customers.filter(c=>!c.deleted)}
