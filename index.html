@@ -734,10 +734,12 @@
       });
       const data=await res.json().catch(()=>({}));
       if(!res.ok){throw new Error(data.error||('Send failed ('+res.status+')'));}
-      // success: mark the quote Sent and save
+      // success: mark the quote Sent, re-lock it, and refresh the screen so the lock shows
       currentQuote.status='Sent';
+      quoteEditUnlocked=false;               // it's back in the customer's hands — lock it
       if($('quoteStatus'))$('quoteStatus').value='Sent';
       persistCurrentQuote();
+      renderAll();                           // apply the lock (banner, read-only, Edit button)
       setBtn('Sent \u2713',true);
       setTimeout(()=>setBtn('Email to Customer',false),2500);
       alert('Quote emailed to '+to+' with an approval link, and marked Sent.');
