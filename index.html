@@ -80,7 +80,7 @@
       <div id="quoteCustomerBox"></div>
       <div class="divider"></div>
       <label>Quote name</label><input id="quoteName" oninput="currentQuote.name=this.value; scheduleSave(); renderSummary();" />
-      <label>Status</label><select id="quoteStatus" onchange="currentQuote.status=this.value; if(this.value==='Approved')quoteEditUnlocked=false; scheduleSave(); renderSummary();"><option>Draft</option><option>Sent</option><option>Approved</option><option>Completed</option><option>Lost</option></select>
+      <label>Status</label><select id="quoteStatus" onchange="currentQuote.status=this.value; if(this.value==='Approved'||this.value==='Sent')quoteEditUnlocked=false; scheduleSave(); renderSummary();"><option>Draft</option><option>Sent</option><option>Approved</option><option>Completed</option><option>Lost</option></select>
       <div class="total" id="grandTotal">$0</div>
       <div class="pillrow" style="margin-top:10px"><span class="pill" id="treeCount">0 trees</span><span class="pill" id="hoursTotal">0 hours</span><span class="pill" id="haulHoursTotal">0 haul hrs</span></div>
       <div class="divider"></div>
@@ -91,7 +91,7 @@
       <div class="divider"></div>
       <h3>Customer-facing quote</h3>
       <p class="small">No hourly rates or man-hour breakdowns are shown here.</p>
-      <div id="lockedBanner" class="ok hidden" style="margin-bottom:10px">This quote is <b>Approved</b> and locked. Tap <b>Edit</b> to make changes — it will return to Draft and need to be re-sent for approval.</div><div class="actions"><button class="btn primary hidden" id="editQuoteBtn" onclick="unlockQuoteForEdit()">Edit</button><button class="btn primary" onclick="emailQuote()">Email to Customer</button><button class="btn" onclick="refreshQuoteStatus(this)">Refresh Status</button><button class="btn" onclick="copyCustomerQuote()">Copy Customer Quote</button><button class="btn" onclick="printCustomerQuote()">Print</button></div>
+      <div id="lockedBanner" class="ok hidden" style="margin-bottom:10px">This quote has been <b id="lockStatusWord">sent</b> to the customer and is locked. Tap <b>Edit</b> to change it — it will return to Draft, the old link will stop working, and you'll re-send for approval.</div><div class="actions"><button class="btn primary hidden" id="editQuoteBtn" onclick="unlockQuoteForEdit()">Edit</button><button class="btn primary" onclick="emailQuote()">Email to Customer</button><button class="btn" onclick="refreshQuoteStatus(this)">Refresh Status</button><button class="btn" onclick="copyCustomerQuote()">Copy Customer Quote</button><button class="btn" onclick="printCustomerQuote()">Print</button></div>
       <textarea id="customerQuoteText" rows="14" style="margin-top:10px" readonly></textarea>
       <div class="divider"></div>
       <h3>Internal summary</h3>
@@ -568,11 +568,24 @@
     currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],customerId:c.id,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     activeQuoteId=null; quoteEditUnlocked=false; persistCurrentQuote(); saveLocal(); renderAll(); showTab('quote');
   }
+  async function voidApproval(token){
+    if(!(firebaseReady&&db&&token))return;
+    try{
+      // flag the outstanding link as voided so the customer's page shows the friendly notice
+      await setDoc(doc(db,'approvals',token),{status:'voided'},{merge:true});
+    }catch(e){}
+  }
   window.unlockQuoteForEdit=function(){
-    if(!confirm('This quote is approved. Editing it will set it back to Draft and it will need to be re-sent to the customer for approval. Continue?'))return;
+    const wasSent=currentQuote.status==='Sent'||currentQuote.status==='Approved';
+    const msg=currentQuote.status==='Approved'
+      ? 'This quote is approved. Editing it will set it back to Draft, cancel the old approval link, and it will need to be re-sent for approval. Continue?'
+      : 'This quote was sent to the customer. Editing it will set it back to Draft and cancel the old link, so you can re-send the updated quote. Continue?';
+    if(!confirm(msg))return;
     quoteEditUnlocked=true;
+    const oldToken=currentQuote.approvalToken;
     currentQuote.status='Draft';
     currentQuote.approvalToken='';          // old approval link no longer applies
+    if(wasSent&&oldToken)voidApproval(oldToken);   // kill the link sitting in the customer's inbox
     persistCurrentQuote(); saveLocal(); scheduleSave(); renderAll();
   }
     window.duplicateQuote=function(qid){const c=activeCustomer(); if(!c)return; const q=c.quotes.find(x=>x.id===qid); if(!q)return; currentQuote=clone(q); currentQuote.id=uid(); currentQuote.customerId=c.id; currentQuote.name=(currentQuote.name||'Quote')+' Copy'; currentQuote.status='Draft'; currentQuote.createdAt=new Date().toISOString(); activeQuoteId=null; renderAll(); showTab('quote');}
@@ -817,10 +830,11 @@
   function renderTreeTypes(){$('treeTypesList').innerHTML=state.treeTypes.map(t=>`<div class="check"><span style="flex:1">${esc(t)}</span><input type="number" step="0.05" min="0.05" style="width:80px" value="${state.settings.species?.[t]??1}" onchange="updateSpecies('${attr(t)}',this.value)"><button class="btn bad" onclick="deleteTreeType('${attr(t)}')">Delete</button></div>`).join('')}
   function applyQuoteLock(){
     // lock is derived straight from the quote's status, so it can never drift out of sync
-    const locked=(currentQuote&&currentQuote.status==='Approved'&&!quoteEditUnlocked);
+    const locked=(currentQuote&&(currentQuote.status==='Sent'||currentQuote.status==='Approved')&&!quoteEditUnlocked);
     const eb=$('editQuoteBtn'), lb=$('lockedBanner');
     if(eb)eb.classList.toggle('hidden',!locked);
     if(lb)lb.classList.toggle('hidden',!locked);
+    const wordEl=$('lockStatusWord'); if(wordEl&&currentQuote)wordEl.textContent=(currentQuote.status==='Approved'?'approved':'sent');
     const quote=$('quote'); if(!quote)return;
     quote.querySelectorAll('input,select,textarea').forEach(el=>{ el.disabled=locked; });
     ['treeList','quoteBottomActions'].forEach(id=>{const box=$(id); if(box)box.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=locked);});
