@@ -831,6 +831,14 @@
     const dlg=$('scheduleDialog');
     $('schedDlgTitle').innerHTML=(existing?'Edit time — ':'Schedule — ')+esc(c.name||'Customer')+
       (q.jobHours?` <span class="badge" style="background:#eef4ff;color:#1e40af;float:right">${(Math.round(q.jobHours*10)/10)} hrs</span>`:'');
+    const sheet=$('schedDlgCrewSheet');
+    if(sheet){
+      const h=Number(q.jobHours||0);
+      if(h>0){
+        const r=n=>Math.round(h/n*10)/10;
+        sheet.innerHTML=`Crew split: <b>1 man</b> ${r(1)}h · <b>2 man</b> ${r(2)}h · <b>3 man</b> ${r(3)}h`;
+      } else sheet.innerHTML='';
+    }
     $('schedDlgDate').value=q.scheduledDate||ymd(new Date());
     $('schedDlgStart').value=q.startTime||'08:00';
     $('schedDlgEndDate').value=q.scheduledEndDate||q.scheduledDate||ymd(new Date());
@@ -1255,6 +1263,7 @@
   <div id="scheduleDialog" class="hidden" style="position:fixed;inset:0;background:rgba(16,24,40,.45);display:flex;align-items:center;justify-content:center;padding:14px;z-index:50">
     <div class="card" style="max-width:420px;width:100%;box-sizing:border-box;overflow:hidden">
       <h3 id="schedDlgTitle" style="margin:0 0 10px">Schedule</h3>
+      <div id="schedDlgCrewSheet" class="small" style="margin:-4px 0 10px;color:#1e40af"></div>
       <label>Start date</label>
       <input id="schedDlgDate" type="date" oninput="schedSpanChanged()" style="display:block;width:100%;box-sizing:border-box" />
       <label>Start time</label>
