@@ -144,6 +144,7 @@
 
   <section id="settings" class="hidden grid two">
     <div class="card"><h2>Rates</h2><label>Standard hourly rate</label><input type="number" id="standardRate" oninput="updateSetting('standardRate', this.value)" /><label>Risky hourly rate</label><input type="number" id="riskyRate" oninput="updateSetting('riskyRate', this.value)" /><label>Haul away labor ratio</label><input type="number" step="0.1" id="haulRatio" oninput="updateSetting('haulRatio', this.value)" /><p class="small">Base ratio for all services. Each service can multiply this on the Service Hours card below.</p><label>Minimum job charge</label><input type="number" id="minCharge" oninput="updateSetting('minCharge', this.value)" /><div class="divider"></div><label class="check"><input type="checkbox" id="deadwoodRisky" onchange="updateBoolSetting('deadwoodRisky', this.checked)"><span>Bill deadwood hours at the risky rate</span></label><label class="check" style="margin-top:6px"><input type="checkbox" id="hazardRisky" onchange="updateBoolSetting('hazardRisky', this.checked)"><span>Bill hazard limb hours at the risky rate</span></label><label class="check" style="margin-top:6px"><input type="checkbox" id="stormRisky" onchange="updateBoolSetting('stormRisky', this.checked)"><span>Bill storm cleanup hours at the risky rate</span></label><p class="small">Each applies the risky rate to only that service's minutes. Everything else on the tree stays standard. Removals are set per tree instead, since it depends on the landing.</p></div>
+    <div class="card"><h2>Working Hours</h2><p class="small">The daily start and end used to spread multi-day jobs across the calendar. A full day counts as end minus start.</p><div class="row"><div><label>Day starts at</label><select id="workStartHour" onchange="updateSetting('workStartHour', this.value)"></select></div><div><label>Day ends at</label><select id="workEndHour" onchange="updateSetting('workEndHour', this.value)"></select></div></div><p class="small" id="workHoursNote" style="margin-top:8px"></p></div>
     <div class="card"><h2>Customer Quote Notes</h2><p class="small">These notes appear on the customer-facing quote. Leave blank to hide the Notes section.</p><label>Quote notes</label><textarea id="quoteNotes" rows="5" oninput="updateTextSetting('quoteNotes', this.value)"></textarea></div>
     
     <div class="card" style="grid-column:1/-1"><h2>Service Hours Per Tree</h2><p class="small">Internal only. These do not appear on the customer quote. <b>Haul ×</b> multiplies the base haul ratio for that service, so removals can haul more per hour worked than trimming.</p><div id="serviceSettings" class="grid"></div></div>
@@ -216,7 +217,7 @@
   // which scopes carry no risky-billable deadwood
   const defaultHaulMult={}; services.forEach(s=>defaultHaulMult[s]=1); defaultHaulMult[REMOVAL]=2;
   const defaultSpecies={}; defaultTreeTypes.forEach(t=>defaultSpecies[t]=1);
-  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',components:structuredClone(defaultComponents),lotPass:structuredClone(defaultLotPass),serviceRates:structuredClone(defaultServiceRates),serviceHaulMult:defaultHaulMult,deadwoodRisky:false,hazardRisky:true,stormRisky:false,species:defaultSpecies,allowedEmails:[],notifyEmails:[OWNER_EMAIL]};
+  const defaultSettings={standardRate:125,riskyRate:185,haulRatio:1,minCharge:500,workStartHour:6,workEndHour:21,quoteNotes:'Quote does not include additional hidden hazards or work not listed above.',components:structuredClone(defaultComponents),lotPass:structuredClone(defaultLotPass),serviceRates:structuredClone(defaultServiceRates),serviceHaulMult:defaultHaulMult,deadwoodRisky:false,hazardRisky:true,stormRisky:false,species:defaultSpecies,allowedEmails:[],notifyEmails:[OWNER_EMAIL]};
   let state={settings:structuredClone(defaultSettings),treeTypes:[...defaultTreeTypes],customers:[],companyId:'tree-company'};
   let currentQuote={id:uid(),name:'New Quote',status:'Draft',trees:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   let activeCustomerId=null, activeQuoteId=null, quoteEditUnlocked=false;
@@ -230,6 +231,8 @@
   function loadLocal(){try{const s=JSON.parse(localStorage.getItem('treeQuoteSharedState')||'null'); if(s) state=deepMerge(state,s); const q=JSON.parse(localStorage.getItem('treeQuoteCurrentQuote')||'null'); if(q) currentQuote=q; activeCustomerId=localStorage.getItem('treeQuoteActiveCustomerId')||null; activeQuoteId=localStorage.getItem('treeQuoteActiveQuoteId')||null;}catch(e){} state.companyId=FIXED_COMPANY_ID;}
   function ensureSettings(){
     const s=state.settings;
+    if(s.workStartHour===undefined)s.workStartHour=6;
+    if(s.workEndHour===undefined)s.workEndHour=21;
     if(!s.serviceHaulMult)s.serviceHaulMult={};
     services.forEach(n=>{if(s.serviceHaulMult[n]===undefined)s.serviceHaulMult[n]=(n==='Tree Removal'?2:1);});
     if(!s.components)s.components=clone(defaultComponents);
@@ -718,13 +721,15 @@
     </div>`;
   }
   // ---- multi-day span math ----
-  const WORK_START_HOUR=6, WORK_END_HOUR=21;   // 6am through the 8pm hour = ends 9pm (21:00)
-  const FULL_DAY_HOURS=WORK_END_HOUR-WORK_START_HOUR;  // 15
-  function hourOf(t){const [h]=String(t||'').split(':').map(Number); return isFinite(h)?h:WORK_START_HOUR;}
+  // working-hours window comes from Settings (falls back to 6am–9pm)
+  function workStart(){const v=Number(state.settings&&state.settings.workStartHour); return isFinite(v)?v:6;}
+  function workEnd(){const v=Number(state.settings&&state.settings.workEndHour); return isFinite(v)?v:21;}
+  function fullDayHours(){return Math.max(1,workEnd()-workStart());}
+  function hourOf(t){const [h]=String(t||'').split(':').map(Number); return isFinite(h)?h:workStart();}
   // returns array of {key, hours} for each day the job touches
   function spanDays(startDate,startTime,endDate,endTime){
     const s=parseYmd(startDate), e=parseYmd(endDate||startDate);
-    if(e<s)return [{key:ymd(s),hours:FULL_DAY_HOURS}];
+    if(e<s)return [{key:ymd(s),hours:fullDayHours()}];
     const sameDay=ymd(s)===ymd(e);
     if(sameDay){
       const h=Math.max(1,(hourOf(endTime)-hourOf(startTime)));
@@ -734,9 +739,9 @@
     while(cur<=e){
       const key=ymd(cur);
       let hours;
-      if(key===ymd(s))hours=Math.max(1,WORK_END_HOUR-hourOf(startTime));   // first day: start-time to 9pm
-      else if(key===ymd(e))hours=Math.max(1,hourOf(endTime)-WORK_START_HOUR); // last day: 6am to end-time
-      else hours=FULL_DAY_HOURS;                                            // full middle day
+      if(key===ymd(s))hours=Math.max(1,workEnd()-hourOf(startTime));   // first day: start-time to end-of-day
+      else if(key===ymd(e))hours=Math.max(1,hourOf(endTime)-workStart()); // last day: start-of-day to end-time
+      else hours=fullDayHours();                                            // full middle day
       out.push({key,hours});
       cur.setDate(cur.getDate()+1);
     }
@@ -1023,7 +1028,18 @@
   window.updateTree=(id,field,value)=>{const t=currentQuote.trees.find(x=>x.id===id); if(!t)return; t[field]=value; scheduleSave(); renderAll();}
   window.toggleTreeCollapsed=id=>{const t=currentQuote.trees.find(x=>x.id===id); if(!t)return; t.collapsed=!t.collapsed; scheduleSave(); renderAll();}
   window.toggleService=(id,service,checked)=>{const t=currentQuote.trees.find(x=>x.id===id); if(!t)return; t.services=t.services||{}; t.services[service]=checked; scheduleSave(); renderAll();}
-  window.updateSetting=(field,value)=>{state.settings[field]=Number(value); scheduleSave(); renderAll();}
+  window.updateSetting=(field,value)=>{
+    state.settings[field]=Number(value);
+    // keep the working day sane: end must be after start
+    if(field==='workStartHour'||field==='workEndHour'){
+      if(Number(state.settings.workEndHour)<=Number(state.settings.workStartHour)){
+        alert('The day must end after it starts. Adjusting.');
+        if(field==='workStartHour')state.settings.workEndHour=Math.min(23,Number(state.settings.workStartHour)+1);
+        else state.settings.workStartHour=Math.max(0,Number(state.settings.workEndHour)-1);
+      }
+    }
+    scheduleSave(); renderAll();
+  }
   window.updateTextSetting=(field,value)=>{state.settings[field]=value; scheduleSave(); renderAll();}
   window.updateComponent=(key,axis,value)=>{if(!state.settings.components[key])state.settings.components[key]=clone(defaultComponents[key]); state.settings.components[key][axis]=Number(value); scheduleSave(); renderAll();}
   window.updateLotPass=(axis,value)=>{if(!state.settings.lotPass)state.settings.lotPass=clone(defaultLotPass); state.settings.lotPass[axis]=Number(value); scheduleSave(); renderAll();}
@@ -1208,10 +1224,19 @@
     const nm=label?`<div style="font-weight:700;color:var(--ink);font-size:14px;margin:8px 0 2px">${esc(label)}</div>`:'';
     return `${nm}<div class="three"><div><label>min / height-ft</label><input type="number" step="0.5" min="0" value="${rate.h}" oninput="${onh}"></div><div><label>min / canopy-ft</label><input type="number" step="0.5" min="0" value="${rate.c}" oninput="${onc}"></div><div><label>min / DBH-in</label><input type="number" step="0.5" min="0" value="${rate.d}" oninput="${ond}"></div></div>`;
   }
+  function hourLabel(h){h=Number(h); const ap=h>=12?'PM':'AM'; const h12=((h+11)%12)+1; return h12+':00 '+ap;}
   function renderSettings(){
     ['standardRate','riskyRate','haulRatio','minCharge'].forEach(id=>{if($(id))$(id).value=state.settings[id]});
     if($('quoteNotes'))$('quoteNotes').value=state.settings.quoteNotes||'';
     ['deadwoodRisky','hazardRisky','stormRisky'].forEach(k=>{if($(k))$(k).checked=!!state.settings[k]});
+    // working-hours dropdowns (0–23), showing readable times
+    const ws=$('workStartHour'), we=$('workEndHour');
+    if(ws&&we){
+      const opts=sel=>Array.from({length:24},(_,h)=>`<option value="${h}" ${h===sel?'selected':''}>${hourLabel(h)}</option>`).join('');
+      ws.innerHTML=opts(workStart()); we.innerHTML=opts(workEnd());
+      const note=$('workHoursNote');
+      if(note){const span=fullDayHours(); note.textContent='A full working day = '+span+' hour'+(span===1?'':'s')+' ('+hourLabel(workStart())+' to '+hourLabel(workEnd())+').';}
+    }
     const box=$('serviceSettings'); box.innerHTML='';
     const S=state.settings;
 
