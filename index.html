@@ -851,24 +851,24 @@
   window.openRescheduleDialog=function(cid,qid){openSchedulePicker(cid,qid,true);}
   window.closeScheduleDialog=function(){$('scheduleDialog').classList.add('hidden'); scheduleDialogTarget=null;}
   window.confirmSchedule=function(){
-    console.log('[sched] confirmSchedule fired. target=',scheduleDialogTarget);
-    if(!scheduleDialogTarget){console.log('[sched] no target — aborting'); return;}
+    if(!scheduleDialogTarget)return;
     const {cid,qid}=scheduleDialogTarget;
-    const c=state.customers.find(x=>x.id===cid); if(!c){console.log('[sched] customer not found',cid); return closeScheduleDialog();}
-    const q=(c.quotes||[]).find(x=>x.id===qid); if(!q){console.log('[sched] quote not found',qid); return closeScheduleDialog();}
+    const c=state.customers.find(x=>x.id===cid); if(!c)return closeScheduleDialog();
+    const q=(c.quotes||[]).find(x=>x.id===qid); if(!q)return closeScheduleDialog();
     const date=$('schedDlgDate').value, start=$('schedDlgStart').value;
     const endDate=$('schedDlgEndDate').value||date, end=$('schedDlgEnd').value;
-    console.log('[sched] values:',{date,start,endDate,end});
     if(!date)return alert('Pick a start date.');
     if(endDate<date)return alert('End date can\'t be before the start date.');
     if(endDate===date && start && end && end<=start)return alert('For a same-day job, end time must be after start time.');
     q.scheduledDate=date; q.startTime=start; q.scheduledEndDate=endDate; q.endTime=end;
     if(!Array.isArray(q.crew))q.crew=[];
     q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt;
+    // keep the open quote in sync if it happens to be this same one
+    if(currentQuote&&currentQuote.id===qid){currentQuote.scheduledDate=date; currentQuote.startTime=start; currentQuote.scheduledEndDate=endDate; currentQuote.endTime=end;}
     scheduleAnchor=parseYmd(date);
-    console.log('[sched] saved to quote. scheduledDate=',q.scheduledDate,'status=',q.status);
-    closeScheduleDialog(); scheduleSave(); saveNow(); renderSchedule(); renderAll();
-    console.log('[sched] render complete');
+    // save the edited array quote DIRECTLY — do NOT route through persistCurrentQuote,
+    // which would overwrite this customer's quote with the (different) on-screen currentQuote.
+    closeScheduleDialog(); saveLocal(); saveNow(); renderSchedule(); renderAll();
   }
   window.unschedule=function(cid,qid){
     const c=state.customers.find(x=>x.id===cid); if(!c)return;
@@ -940,6 +940,14 @@
     if(!(currentQuote.trees||[]).length && i<0)return;
     const rec=clone(currentQuote);
     delete rec.draft; delete rec.edited; delete rec.baseline;
+    // NEVER let the on-screen quote (which may not carry schedule fields) wipe an existing
+    // schedule on the saved record. Preserve schedule/crew fields from what's already stored.
+    if(i>=0){
+      const existing=c.quotes[i];
+      ['scheduledDate','startTime','scheduledEndDate','endTime','crew','approvedAt','declinedAt'].forEach(k=>{
+        if(rec[k]===undefined && existing[k]!==undefined) rec[k]=existing[k];
+      });
+    }
     const _calc=allCalc(); rec.total=_calc.total; rec.jobHours=_calc.base+_calc.haul; rec.updatedAt=new Date().toISOString();
     if(i>=0)c.quotes[i]=rec; else c.quotes.unshift(rec);
     c.updatedAt=rec.updatedAt; activeQuoteId=currentQuote.id;
