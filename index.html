@@ -705,8 +705,19 @@
     }));
     return out;
   }
+  // the working window for a specific day of a (possibly multi-day) job
+  function dayWindow(q,dayKey){
+    const start=q.scheduledDate, end=q.scheduledEndDate||q.scheduledDate;
+    const single=!end||end===start;
+    if(single)return {from:q.startTime||'', to:q.endTime||''};
+    const pad=h=>String(h).padStart(2,'0')+':00';
+    if(dayKey===start)return {from:q.startTime||pad(workStart()), to:pad(workEnd())};      // first day: start → end of day
+    if(dayKey===end)return {from:pad(workStart()), to:q.endTime||pad(workEnd())};           // last day: start of day → end
+    return {from:pad(workStart()), to:pad(workEnd())};                                       // middle day: full day
+  }
   function jobCardHtml(c,q,dayKey){
-    const time=(q.startTime||q.endTime)?`${fmtTime(q.startTime)}${q.endTime?'–'+fmtTime(q.endTime):''}`:'time TBD';
+    const win=dayKey?dayWindow(q,dayKey):{from:q.startTime,to:q.endTime};
+    const time=(win.from||win.to)?`${fmtTime(win.from)}${win.to?'–'+fmtTime(win.to):''}`:'time TBD';
     const multi=isMultiDay(q);
     const share=dayKey?jobDayShare(q,dayKey):(Number(q.total)||0);
     const dollarLabel=multi?`${money(share)} <span class="small">of ${money(q.total||0)}</span>`:money(q.total||0);
