@@ -851,20 +851,24 @@
   window.openRescheduleDialog=function(cid,qid){openSchedulePicker(cid,qid,true);}
   window.closeScheduleDialog=function(){$('scheduleDialog').classList.add('hidden'); scheduleDialogTarget=null;}
   window.confirmSchedule=function(){
-    if(!scheduleDialogTarget)return;
+    console.log('[sched] confirmSchedule fired. target=',scheduleDialogTarget);
+    if(!scheduleDialogTarget){console.log('[sched] no target — aborting'); return;}
     const {cid,qid}=scheduleDialogTarget;
-    const c=state.customers.find(x=>x.id===cid); if(!c)return closeScheduleDialog();
-    const q=(c.quotes||[]).find(x=>x.id===qid); if(!q)return closeScheduleDialog();
+    const c=state.customers.find(x=>x.id===cid); if(!c){console.log('[sched] customer not found',cid); return closeScheduleDialog();}
+    const q=(c.quotes||[]).find(x=>x.id===qid); if(!q){console.log('[sched] quote not found',qid); return closeScheduleDialog();}
     const date=$('schedDlgDate').value, start=$('schedDlgStart').value;
     const endDate=$('schedDlgEndDate').value||date, end=$('schedDlgEnd').value;
+    console.log('[sched] values:',{date,start,endDate,end});
     if(!date)return alert('Pick a start date.');
     if(endDate<date)return alert('End date can\'t be before the start date.');
     if(endDate===date && start && end && end<=start)return alert('For a same-day job, end time must be after start time.');
     q.scheduledDate=date; q.startTime=start; q.scheduledEndDate=endDate; q.endTime=end;
-    if(!Array.isArray(q.crew))q.crew=[];        // crew data foundation (UI later)
+    if(!Array.isArray(q.crew))q.crew=[];
     q.updatedAt=new Date().toISOString(); c.updatedAt=q.updatedAt;
-    scheduleAnchor=parseYmd(date);   // jump the view to the date we just scheduled into
+    scheduleAnchor=parseYmd(date);
+    console.log('[sched] saved to quote. scheduledDate=',q.scheduledDate,'status=',q.status);
     closeScheduleDialog(); scheduleSave(); saveNow(); renderSchedule(); renderAll();
+    console.log('[sched] render complete');
   }
   window.unschedule=function(cid,qid){
     const c=state.customers.find(x=>x.id===cid); if(!c)return;
